@@ -35,6 +35,29 @@ jobs:
           path: src/imgui
           clean: false
 
+      - name: Patch CommonLibF4 for MSVC 18 / fmt 12
+        shell: pwsh
+        run: |
+          $hv = 'src/CommonLibF4/CommonLibF4/include/RE/Havok/hkVector4.h'
+          $t = Get-Content $hv -Raw
+          $t2 = $t.Replace('hkVector4f& GetNormalized()', 'hkVector4f GetNormalized()')
+          if ($t2 -eq $t) { Write-Error "hkVector4.h 未替换"; exit 1 }
+          Set-Content $hv -Value $t2 -NoNewline -Encoding utf8
+          Write-Host '  patched hkVector4.h'
+
+          $api = 'src/CommonLibF4/CommonLibF4/src/F4SE/API.cpp'
+          $a = Get-Content $api -Raw
+          $a2 = $a.Replace(
+            'log::info("{} v{}", GetPluginName(), GetPluginVersion());',
+            'log::info("{} v{}", GetPluginName(), GetPluginVersion().string());')
+          if ($a2 -eq $a) { Write-Error "API.cpp 未替换"; exit 1 }
+          Set-Content $api -Value $a2 -NoNewline -Encoding utf8
+          Write-Host '  patched API.cpp'
+
+          Write-Host '--- 确认两处 patch ---'
+          Select-String -Path $hv -Pattern 'hkVector4f GetNormalized' | ForEach-Object { '  ' + $_.Line.Trim() }
+          Select-String -Path $api -Pattern 'GetPluginVersion\(\).string\(\)' | ForEach-Object { '  ' + $_.Line.Trim() }
+
       - name: Setup vcpkg (use runner-preinstalled copy)
         shell: pwsh
         run: |
