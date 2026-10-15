@@ -1,28 +1,29 @@
 #pragma once
-// ============================================================================
-// 兼容层：TTS 用旧式的 RE::BSShaderManager::GetDirectionalAmbientColorsA()，
-// 但 powerof3/CommonLibF4 已经把这份数据重构到 Sky 类里了
-// （见 Sky.h:176  NiColor directionalAmbientColorsA[3][2];  偏移 0x3B8）。
-//
-// 这里用 Sky 重新实现这两个旧接口，避免改动 TTS 的调用点。
-// ============================================================================
-
+// powerof3/CommonLibF4 has no BSShaderManager at all: the directional ambient
+// colours were refactored into Sky (Sky.h  NiColor directionalAmbientColorsA[3][2]).
+// This shim re-creates the old accessors on top of Sky, and adds the
+// BSShaderManagerState tag type that TTS only uses as a Relocation template arg.
 #include <RE/Bethesda/Sky.h>
 
 namespace RE
 {
+	// TTS uses this only as  REL::Relocation<BSShaderManagerState**>  — it is
+	// never instantiated or dereferenced through member access, so an opaque
+	// declaration is sufficient and carries no layout risk.
+	class BSShaderManagerState;
+
 	class BSShaderManager
 	{
 	public:
-		// 对应 Sky::directionalAmbientColorsA[3][2]
+		// Corresponds to Sky::directionalAmbientColorsA[3][2]
 		[[nodiscard]] static NiColor (*GetDirectionalAmbientColorsA())[2]
 		{
 			auto* sky = Sky::GetSingleton();
 			return sky ? sky->directionalAmbientColorsA : nullptr;
 		}
 
-		// powerof3 版本里没有对应的"local"数组，返回 nullptr。
-		// TTS 的调用点都有 if (localColors) 判空，所以是安全的空操作。
+		// Not present in the powerof3 layout; TTS guards every use with a null
+		// check, so returning nullptr is a safe no-op.
 		[[nodiscard]] static NiColor (*GetLocalDirectionalAmbientColorsA())[2]
 		{
 			return nullptr;
