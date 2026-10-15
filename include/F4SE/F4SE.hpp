@@ -1,10 +1,7 @@
-// NOTE: no #pragma once on purpose -- this header must re-run the
+#pragma once
 // "#undef near/far" below on EVERY inclusion, so that whichever copy is
 // reached after <Windows.h> releases the names for the whole TU.
-#include <tts-undef-winmacros.h>
 
-#ifndef TTS_SHIM_F4SE_HPP
-#define TTS_SHIM_F4SE_HPP
 // Shim: TTS 的 src/PCH.h 用 #include "F4SE/F4SE.hpp"（.hpp），
 // 而 powerof3/CommonLibF4 提供的是 F4SE/F4SE.h（.h），扩展名不同无法互相解析。
 //
@@ -24,4 +21,3 @@ namespace F4SE
 	inline constexpr REL::Version RUNTIME_LATEST_VR{ 1, 2, 72, 0 };
 #endif
 }
-#endif  // TTS_SHIM_F4SE_HPP

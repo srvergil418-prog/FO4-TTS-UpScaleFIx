@@ -1,10 +1,7 @@
-// NOTE: no #pragma once on purpose -- this header must re-run the
+#pragma once
 // "#undef near/far" below on EVERY inclusion, so that whichever copy is
 // reached after <Windows.h> releases the names for the whole TU.
-#include <tts-undef-winmacros.h>
 
-#ifndef TTS_SHIM_BSSHADERMANAGER_HPP
-#define TTS_SHIM_BSSHADERMANAGER_HPP
 // powerof3/CommonLibF4 has no BSShaderManager at all: the directional ambient
 // colours were refactored into Sky (Sky.h  NiColor directionalAmbientColorsA[3][2]).
 // This shim re-creates the old accessors on top of Sky, and adds the
@@ -36,4 +33,3 @@ namespace RE
 		}
 	};
 }
-#endif  // TTS_SHIM_BSSHADERMANAGER_HPP

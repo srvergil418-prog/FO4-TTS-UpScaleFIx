@@ -1,10 +1,7 @@
-// NOTE: no #pragma once on purpose -- this header must re-run the
+#pragma once
 // "#undef near/far" below on EVERY inclusion, so that whichever copy is
 // reached after <Windows.h> releases the names for the whole TU.
-#include <tts-undef-winmacros.h>
 
-#ifndef TTS_SHIM_NIFRUSTUM_HPP
-#define TTS_SHIM_NIFRUSTUM_HPP
 // Shim for TTS's "#include \"RE/NetImmerse/NiFrustum.hpp\"" (.hpp spelling).
 //
 // powerof3/CommonLibF4 ships NiFrustum.h (.h) and does NOT define
@@ -94,4 +91,3 @@ namespace RE
 	};
 	static_assert(sizeof(NiFrustumPlanes) == 0x70);
 }
-#endif  // TTS_SHIM_NIFRUSTUM_HPP

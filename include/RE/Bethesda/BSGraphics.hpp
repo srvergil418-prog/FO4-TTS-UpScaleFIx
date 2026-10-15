@@ -1,10 +1,7 @@
-// NOTE: no #pragma once on purpose -- this header must re-run the
+#pragma once
 // "#undef near/far" below on EVERY inclusion, so that whichever copy is
 // reached after <Windows.h> releases the names for the whole TU.
-#include <tts-undef-winmacros.h>
 
-#ifndef TTS_SHIM_BSGRAPHICS_HPP
-#define TTS_SHIM_BSGRAPHICS_HPP
 // Shim for TTS's "#include \"RE/Bethesda/BSGraphics.hpp\"" (.hpp spelling).
 //
 // powerof3/CommonLibF4 ships BSGraphics.h (.h) but lacks two enums that TTS's
@@ -53,4 +50,3 @@ namespace RE
 	using BSGraphics::TARGET_PERSISTENCY;
 }
 #endif
-#endif  // TTS_SHIM_BSGRAPHICS_HPP
