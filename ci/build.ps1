@@ -121,13 +121,21 @@ Get-Content $pchPath | Select-Object -Last 16 | ForEach-Object { '   ' + $_ }
 Write-Host ''
 
 $pchNow = [System.IO.File]::ReadAllText($pchPath)
+# NOTE: there is deliberately no "undef near/far" check here any more. The
+# near/far problem is solved by include/RE/NetImmerse/NiFrustum.h overriding the
+# library header with nearPlane/farPlane members, so no #undef is needed.
+# The override itself is verified right below, because the whole approach rests
+# on it.
 $checks = @(
-    @{ Name = 'NOMINMAX';        Pattern = '(?m)^#define\s+NOMINMAX' },
-    @{ Name = 'shim marker';     Pattern = 'TTS_APPENDED_BUILD_SHIM' },
-    @{ Name = 'undef near';      Pattern = '(?m)^#\s*undef\s+near\s*$' },
-    @{ Name = 'undef far';       Pattern = '(?m)^#\s*undef\s+far\s*$' },
-    @{ Name = 'BSLight';         Pattern = 'class BSLight' },
-    @{ Name = 'NiFrustumPlanes'; Pattern = 'NiFrustumPlanes::Set' }
+    @{ Name = 'NOMINMAX';          Pattern = '(?m)^#define\s+NOMINMAX' },
+    @{ Name = 'shim marker';       Pattern = 'TTS_APPENDED_BUILD_SHIM' },
+    @{ Name = 'BSLight';           Pattern = 'class BSLight' },
+    @{ Name = 'NiFrustumPlanes';   Pattern = 'NiFrustumPlanes::Set' },
+    @{ Name = 'ShadowSceneNode';   Pattern = 'class ShadowSceneNode' },
+    @{ Name = 'BSShaderAccumulator'; Pattern = 'class BSShaderAccumulator' },
+    @{ Name = 'BSRenderPass';      Pattern = 'class BSRenderPass' },
+    @{ Name = 'BSShaderManagerState'; Pattern = 'class BSShaderManagerState' },
+    @{ Name = 'frust.nearPlane';   Pattern = 'frust\.nearPlane' }
 )
 $failed = @()
 foreach ($c in $checks) {
@@ -142,6 +150,26 @@ if ($failed.Count -gt 0) {
     throw ('TTS CI: PCH.h patch verification failed: ' + ($failed -join ', '))
 }
 Write-Host '  [7/9] PCH.h patch verified'
+
+# Verify the NiFrustum override is in place and really does rename the two
+# macro-tainted members. This is the linchpin of the near/far fix.
+$nifOverride = Join-Path $tts 'include/RE/NetImmerse/NiFrustum.h'
+if (-not (Test-Path $nifOverride)) {
+    throw "TTS CI: missing $nifOverride -- the near/far fix depends on it"
+}
+$nifText = [System.IO.File]::ReadAllText($nifOverride)
+foreach ($need in @('float nearPlane;', 'float farPlane;', 'sizeof(NiFrustum) == 0x1C')) {
+    if (-not $nifText.Contains($need)) {
+        throw "TTS CI: NiFrustum.h override is missing '$need'"
+    }
+}
+if ([regex]::IsMatch($nifText, '(?m)^\s*float\s+near\s*;')) {
+    throw 'TTS CI: NiFrustum.h override still declares a bare near member'
+}
+if ([regex]::IsMatch($nifText, '(?m)^\s*float\s+far\s*;')) {
+    throw 'TTS CI: NiFrustum.h override still declares a bare far member'
+}
+Write-Host '  OK   NiFrustum.h override verified (nearPlane/farPlane, 0x1C)' -ForegroundColor Green
 Write-Host ''
 
 # ================================================================ 8) TTS source tweaks
