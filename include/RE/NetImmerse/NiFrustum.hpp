@@ -1,7 +1,4 @@
 #pragma once
-// "#undef near/far" below on EVERY inclusion, so that whichever copy is
-// reached after <Windows.h> releases the names for the whole TU.
-
 // Shim for TTS's "#include \"RE/NetImmerse/NiFrustum.hpp\"" (.hpp spelling).
 //
 // powerof3/CommonLibF4 ships NiFrustum.h (.h) and does NOT define
@@ -32,12 +29,6 @@
 //
 // After this #undef, .near and .far are ordinary member accesses again.
 // ---------------------------------------------------------------------------
-#ifdef near
-#undef near
-#endif
-#ifdef far
-#undef far
-#endif
 
 #include <RE/NetImmerse/NiFrustum.h>
 #include <RE/NetImmerse/NiPoint.h>

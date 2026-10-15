@@ -173,25 +173,7 @@ if ($s3 -eq $s) { throw 'SettingsPanel.cpp: ImGuiKey_Mod* pattern not found' }
 Set-Content $set -Value $s3 -NoNewline -Encoding utf8
 Write-Host '  [8/9] SettingsPanel.cpp (ImGuiMod_*)'
 
-# ---------------------------------------------------------------- 9) NiFrustum member names
-# TTS writes .nearPlane/.farPlane; powerof3's NiFrustum spells them near/far.
-# NOTE: a "#define nearPlane near" alias would NOT work -- <Windows.h> defines
-# near/far as EMPTY macros. The #undef at the end of ci/PCH.append.h releases
-# those names before any .cpp body is parsed.
-$changed = @()
-Get-ChildItem -Path $src -Recurse -File |
-    Where-Object { $_.Extension -in '.cpp', '.h', '.hpp' } |
-    ForEach-Object {
-        $c = Get-Content $_.FullName -Raw
-        $n = $c.Replace('.nearPlane', '.near').Replace('.farPlane', '.far')
-        if ($n -ne $c) {
-            Set-Content $_.FullName -Value $n -NoNewline -Encoding utf8
-            $changed += $_.Name
-        }
-    }
-if ($changed.Count -eq 0) { throw 'NiFrustum member rename: nothing replaced' }
-Write-Host ('  [9/12] NiFrustum member names: ' + ($changed -join ', '))
-
+# NOTE: no NiFrustum member rename any more.\r\n# include/RE/NetImmerse/NiFrustum.h overrides the library header with members\r\n# named nearPlane/farPlane -- exactly what TTS's sources already write. This\r\n# avoids <Windows.h>'s empty near/far macros entirely, with no #undef games.\r\n
 # ================================================================ 10) RendererShadowState
 # powerof3 leaves RendererShadowState as an opaque 0x910-byte blob, but TTS
 # reads shadowState.CameraData.viewProjMat and shadowState.PosAdjust.
@@ -297,36 +279,12 @@ if ($e2 -eq $e1) { throw 'EventHandler.cpp: UnregisterSink block not found' }
 Set-Content $ehp -Value $e2 -NoNewline -Encoding utf8
 Write-Host '  [12/15] EventHandler.cpp equip watcher disabled'
 
-# ================================================================ 13) release near/far in EVERY translation unit
-# near/far are defined as EMPTY macros by <Windows.h>, so TTS's
-#     frustum.near = 15.0f;
-# expands to
-#     frustum.      = 15.0f;      -> error C2059
-#
-# Undefining them at the end of PCH.h did NOT hold: the macro state does not
-# survive into the .cpp bodies in this setup. Injecting the #undef at the top of
-# each translation unit is guaranteed to be after <Windows.h> (pulled in by the
-# PCH) and before any body code. Only <Windows.h>/<windef.h> define them, and
-# both are include-guarded, so nothing re-defines them afterwards.
-$nReleased = 0
-Get-ChildItem -Path $src -Recurse -File -Filter *.cpp | ForEach-Object {
-    $c = Get-Content $_.FullName -Raw
-    if ($c -notmatch 'TTS_RELEASE_NEAR_FAR') {
-        $hdr = "// TTS_RELEASE_NEAR_FAR`r`n" +
-               "// <Windows.h> defines near/far as EMPTY macros; release them here,`r`n" +
-               "// which is after <Windows.h> (via the PCH) and before any body code.`r`n" +
-               "#ifdef near`r`n" +
-               "#undef near`r`n" +
-               "#endif`r`n" +
-               "#ifdef far`r`n" +
-               "#undef far`r`n" +
-               "#endif`r`n"
-        Set-Content $_.FullName -Value ($hdr + $c) -NoNewline -Encoding utf8
-        $nReleased++
-    }
-}
-if ($nReleased -eq 0) { throw 'near/far release: no .cpp files were patched' }
-Write-Host "  [13/15] released near/far in $nReleased .cpp files"
+# NOTE: there is no "release near/far in every translation unit" step any more.
+# include/RE/NetImmerse/NiFrustum.h overrides the library header so the frustum
+# floats are named nearPlane/farPlane -- the <Windows.h> macros named near/far
+# are never referenced, so no #undef is needed anywhere. (Injecting #undef into
+# each .cpp was tried and did not hold: the injected lines land before the
+# forced-include PCH, i.e. before <Windows.h> has defined the macros.)
 
 # ================================================================ 14) ZPrePassDrawData cast
 # The hook's parameter is AlphaTestZPrePassDrawData, but the trampoline takes
@@ -342,17 +300,33 @@ if ($r1 -eq $r) { throw 'RenderHooks.cpp: g_RenderZPrePassOriginal call not foun
 Set-Content $rhp -Value $r1 -NoNewline -Encoding utf8
 Write-Host '  [14/15] RenderHooks.cpp ZPrePass cast'
 
-# ================================================================ 15) second Renderer::GetSingleton site
+# ================================================================ 15) restore PosAdjust -> no-op
+# The backup site declares `context` inside an inner `if (contextPtr) { ... }`
+# block, so it is out of scope at the restore site. Renderer::GetSingleton() does
+# not exist in powerof3 either, so this restore is simply dropped: PosAdjust is
+# never rewritten by this path, so there is nothing to put back.
 $spr2 = Join-Path $src 'rendering/SecondPassRenderer.cpp'
 $sp = Get-Content $spr2 -Raw
 $sp5 = $sp.Replace(
     'RE::BSGraphics::Renderer::GetSingleton().SetPosAdjust(&backupPosAdjust);',
-    "// build shim: Renderer::GetSingleton() is not present in powerof3; write`r`n" +
-    "				// through the Context we already hold.`r`n" +
-    "				context->shadowState.PosAdjust = backupPosAdjust;")
+    "// build shim: Renderer::GetSingleton() is absent from powerof3, and the`r`n" +
+    "				// Context used above is out of scope here, so this restore is dropped.`r`n" +
+    "				// PosAdjust is never rewritten by this path any more.")
 if ($sp5 -eq $sp) { throw 'SecondPassRenderer: restore SetPosAdjust not found' }
 Set-Content $spr2 -Value $sp5 -NoNewline -Encoding utf8
-Write-Host '  [15/15] SecondPassRenderer.cpp restore-PosAdjust downgraded'
+Write-Host '  [15/15] SecondPassRenderer.cpp restore-PosAdjust -> no-op'
+
+# The backup side also calls Renderer::GetSingleton().SetPosAdjust(...); it sits
+# inside the contextPtr block where `context` IS in scope, so it can write
+# through the Context instead.
+$sp6 = $sp5.Replace(
+    'RE::BSGraphics::Renderer::GetSingleton().SetPosAdjust(&scopePosAdjust);',
+    "// build shim: Renderer::GetSingleton() is absent from powerof3; write`r`n" +
+    "				// through the Context we already hold two lines above.`r`n" +
+    "				context->shadowState.PosAdjust = scopePosAdjust;")
+if ($sp6 -eq $sp5) { throw 'SecondPassRenderer: set PosAdjust not found' }
+Set-Content $spr2 -Value $sp6 -NoNewline -Encoding utf8
+Write-Host '  [15/15] SecondPassRenderer.cpp set-PosAdjust via Context'
 Write-Host ''
 
 Write-Host '=== all patches applied ==='

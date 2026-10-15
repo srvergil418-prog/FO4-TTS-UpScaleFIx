@@ -219,17 +219,17 @@ namespace RE
 		};
 		// forward*near + axis*extent -- the edge direction of one frustum side.
 		auto toward = [&](const NiPoint3& a_axis, float a_extent) {
-			return NiPoint3{ forward.x * frust.near + a_axis.x * a_extent,
-							 forward.y * frust.near + a_axis.y * a_extent,
-							 forward.z * frust.near + a_axis.z * a_extent };
+			return NiPoint3{ forward.x * frust.nearPlane + a_axis.x * a_extent,
+							 forward.y * frust.nearPlane + a_axis.y * a_extent,
+							 forward.z * frust.nearPlane + a_axis.z * a_extent };
 		};
 		auto onPoint = [&](NiPlane& a_plane, const NiPoint3& a_normal, const NiPoint3& a_point) {
 			a_plane.m_kNormal = a_normal;
 			a_plane.m_fConstant = a_normal.x * a_point.x + a_normal.y * a_point.y + a_normal.z * a_point.z;
 		};
 
-		const NiPoint3 nearPoint{ camPos.x + forward.x * frust.near, camPos.y + forward.y * frust.near, camPos.z + forward.z * frust.near };
-		const NiPoint3 farPoint{ camPos.x + forward.x * frust.far, camPos.y + forward.y * frust.far, camPos.z + forward.z * frust.far };
+		const NiPoint3 nearPoint{ camPos.x + forward.x * frust.nearPlane, camPos.y + forward.y * frust.nearPlane, camPos.z + forward.z * frust.nearPlane };
+		const NiPoint3 farPoint{ camPos.x + forward.x * frust.farPlane, camPos.y + forward.y * frust.farPlane, camPos.z + forward.z * frust.farPlane };
 		const NiPoint3 negForward{ -forward.x, -forward.y, -forward.z };
 
 		onPoint(m_akCullingPlanes[kNearPlane], forward, nearPoint);
@@ -367,26 +367,7 @@ namespace RE
 	};
 }
 
-// ===========================================================================
-// CRITICAL -- must stay at the very END of the appended block.
-//
-// <Windows.h> defines near and far as *EMPTY* macros. TTS's sources write
-//
-//     frustum.near = 15.0f;
-//
-// which therefore expands to
-//
-//     frustum.      = 15.0f;      -> error C2059
-//
-// (The library's own NiFrustum.h survives "float near;" only because it is
-//  included before <Windows.h>.)
-//
-// Because this shim is appended to the end of PCH.h, this is reached AFTER
-// <Windows.h> has been pulled in -- the only point where the #undef can help.
-// ===========================================================================
-#ifdef near
-#undef near
-#endif
-#ifdef far
-#undef far
-#endif
+// NOTE: no "#undef near/far" is needed any more.
+// include/RE/NetImmerse/NiFrustum.h overrides the library header and names
+// the two frustum floats nearPlane/farPlane, so the <Windows.h> macros named
+// near/far are never referenced at all.
