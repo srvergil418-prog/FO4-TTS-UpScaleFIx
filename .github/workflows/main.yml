@@ -453,6 +453,13 @@ jobs:
             $fwd += "		EnableAllPlanes();`r`n"
             $fwd += "	}`r`n"
             $fwd += "}`r`n"
+            $fwd += "`r`n"
+            $fwd += "#ifdef near`r`n"
+            $fwd += "#undef near`r`n"
+            $fwd += "#endif`r`n"
+            $fwd += "#ifdef far`r`n"
+            $fwd += "#undef far`r`n"
+            $fwd += "#endif`r`n"
             $p = $p + "`r`n" + $fwd
             Write-Host '  [6/6] PCH.h += build shim (inline)'
           } else {
