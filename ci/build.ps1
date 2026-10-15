@@ -201,7 +201,11 @@ if ($s3 -eq $s) { throw 'SettingsPanel.cpp: ImGuiKey_Mod* pattern not found' }
 Set-Content $set -Value $s3 -NoNewline -Encoding utf8
 Write-Host '  [8/9] SettingsPanel.cpp (ImGuiMod_*)'
 
-# NOTE: no NiFrustum member rename any more.\r\n# include/RE/NetImmerse/NiFrustum.h overrides the library header with members\r\n# named nearPlane/farPlane -- exactly what TTS's sources already write. This\r\n# avoids <Windows.h>'s empty near/far macros entirely, with no #undef games.\r\n
+# NOTE: there is no NiFrustum member-rename step any more.
+# include/RE/NetImmerse/NiFrustum.h overrides the library header with members
+# named nearPlane/farPlane -- exactly what TTS's sources already write. This
+# avoids <Windows.h>'s empty near/far macros entirely, with no #undef games.
+
 # ================================================================ 10) RendererShadowState
 # powerof3 leaves RendererShadowState as an opaque 0x910-byte blob, but TTS
 # reads shadowState.CameraData.viewProjMat and shadowState.PosAdjust.
@@ -261,8 +265,8 @@ if ($sp2 -eq $sp1) { throw 'SecondPassRenderer: DrawWorld block #2 not found' }
 #     matrices itself further down.
 $sp3 = $sp2.Replace(
     "		gState.SetCameraData(m_scopeCamera, true,`r`n" +
-    "			m_scopeCamera->viewFrustum.near,`r`n" +
-    "			m_scopeCamera->viewFrustum.far);",
+    "			m_scopeCamera->viewFrustum.nearPlane,`r`n" +
+    "			m_scopeCamera->viewFrustum.farPlane);",
     "		// build shim: State::SetCameraData is not present in powerof3. The scope`r`n" +
     "		// camera is already assigned to the global pointers above.`r`n" +
     "		(void)gState;")
