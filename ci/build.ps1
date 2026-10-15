@@ -295,7 +295,64 @@ $e2 = $e1.Replace(
 if ($e2 -eq $e1) { throw 'EventHandler.cpp: UnregisterSink block not found' }
 
 Set-Content $ehp -Value $e2 -NoNewline -Encoding utf8
-Write-Host '  [12/12] EventHandler.cpp equip watcher disabled'
+Write-Host '  [12/15] EventHandler.cpp equip watcher disabled'
+
+# ================================================================ 13) release near/far in EVERY translation unit
+# near/far are defined as EMPTY macros by <Windows.h>, so TTS's
+#     frustum.near = 15.0f;
+# expands to
+#     frustum.      = 15.0f;      -> error C2059
+#
+# Undefining them at the end of PCH.h did NOT hold: the macro state does not
+# survive into the .cpp bodies in this setup. Injecting the #undef at the top of
+# each translation unit is guaranteed to be after <Windows.h> (pulled in by the
+# PCH) and before any body code. Only <Windows.h>/<windef.h> define them, and
+# both are include-guarded, so nothing re-defines them afterwards.
+$nReleased = 0
+Get-ChildItem -Path $src -Recurse -File -Filter *.cpp | ForEach-Object {
+    $c = Get-Content $_.FullName -Raw
+    if ($c -notmatch 'TTS_RELEASE_NEAR_FAR') {
+        $hdr = "// TTS_RELEASE_NEAR_FAR`r`n" +
+               "// <Windows.h> defines near/far as EMPTY macros; release them here,`r`n" +
+               "// which is after <Windows.h> (via the PCH) and before any body code.`r`n" +
+               "#ifdef near`r`n" +
+               "#undef near`r`n" +
+               "#endif`r`n" +
+               "#ifdef far`r`n" +
+               "#undef far`r`n" +
+               "#endif`r`n"
+        Set-Content $_.FullName -Value ($hdr + $c) -NoNewline -Encoding utf8
+        $nReleased++
+    }
+}
+if ($nReleased -eq 0) { throw 'near/far release: no .cpp files were patched' }
+Write-Host "  [13/15] released near/far in $nReleased .cpp files"
+
+# ================================================================ 14) ZPrePassDrawData cast
+# The hook's parameter is AlphaTestZPrePassDrawData, but the trampoline takes
+# ZPrePassDrawData. Neither type exists in powerof3, and the pointer is only
+# forwarded to the original function -- it is never dereferenced here -- so the
+# cast is a type-system formality with no runtime consequence.
+$rhp = Join-Path $src 'RenderHooks.cpp'
+$r = Get-Content $rhp -Raw
+$r1 = $r.Replace(
+    'g_hookMgr->g_RenderZPrePassOriginal(rshadowState, aZPreData, aVertexDesc, aCullmode, aDepthBiasMode);',
+    'g_hookMgr->g_RenderZPrePassOriginal(rshadowState, reinterpret_cast<RE::BSGraphics::ZPrePassDrawData*>(aZPreData), aVertexDesc, aCullmode, aDepthBiasMode);')
+if ($r1 -eq $r) { throw 'RenderHooks.cpp: g_RenderZPrePassOriginal call not found' }
+Set-Content $rhp -Value $r1 -NoNewline -Encoding utf8
+Write-Host '  [14/15] RenderHooks.cpp ZPrePass cast'
+
+# ================================================================ 15) second Renderer::GetSingleton site
+$spr2 = Join-Path $src 'rendering/SecondPassRenderer.cpp'
+$sp = Get-Content $spr2 -Raw
+$sp5 = $sp.Replace(
+    'RE::BSGraphics::Renderer::GetSingleton().SetPosAdjust(&backupPosAdjust);',
+    "// build shim: Renderer::GetSingleton() is not present in powerof3; write`r`n" +
+    "				// through the Context we already hold.`r`n" +
+    "				context->shadowState.PosAdjust = backupPosAdjust;")
+if ($sp5 -eq $sp) { throw 'SecondPassRenderer: restore SetPosAdjust not found' }
+Set-Content $spr2 -Value $sp5 -NoNewline -Encoding utf8
+Write-Host '  [15/15] SecondPassRenderer.cpp restore-PosAdjust downgraded'
 Write-Host ''
 
 Write-Host '=== all patches applied ==='

@@ -10,11 +10,14 @@
 // !! binary-verified definition.
 // ============================================================================
 
+#include <vector>
+
 #include <RE/NetImmerse/NiFrustum.hpp>
 #include <RE/NetImmerse/NiCamera.h>
 #include <RE/NetImmerse/NiStream.h>
 #include <RE/NetImmerse/NiShadeProperty.h>
 #include <RE/NetImmerse/NiTLargeArray.h>
+#include <RE/Bethesda/BSGeometry.h>
 
 // ---------------------------------------------------------------------------
 // Forward declarations for types absent from powerof3/CommonLibF4.
@@ -263,7 +266,15 @@ namespace RE
 	// ------------------------------------------------------------------------
 	// ShadowSceneNode -- TTS passes it where a NiNode* is expected
 	// (SecondPassRenderer.cpp:531), so it must derive from NiNode.
-	// Members written by TTS: light-update control + stored far clip.
+	//
+	// The four scalar members are WRITTEN only, so a wrong offset degrades a
+	// light-update setting rather than corrupting anything.
+	//
+	// The three light lists are deliberately EMPTY std::vectors: their real
+	// engine offsets are unknown, and iterating a wrongly-offset container would
+	// walk arbitrary memory and crash. Empty containers make
+	// LightBackupSystem::BackupLightStates a no-op -- it degrades indoor-light
+	// backup (an enhancement) but cannot crash.
 	// ------------------------------------------------------------------------
 	class ShadowSceneNode : public NiNode
 	{
@@ -272,6 +283,16 @@ namespace RE
 		bool      bDisableLightUpdate;   // inferred
 		float     fStoredFarClip;        // inferred
 		bool      bAlwaysUpdateLights;   // inferred
+
+		// visibility counters TTS saves/restores (plain values, safe to own)
+		std::uint32_t uiVisibleNonShadowLights = 0;
+		std::uint32_t uiVisibleShadowLights = 0;
+		std::uint32_t uiVisibleAmbientLights = 0;
+
+		// intentionally empty -- see note above
+		std::vector<NiPointer<BSLight>> lLightList;
+		std::vector<NiPointer<BSLight>> lShadowLightList;
+		std::vector<NiPointer<BSLight>> lAmbientLightList;
 	};
 
 	// ------------------------------------------------------------------------
@@ -307,25 +328,43 @@ namespace RE
 
 	// ------------------------------------------------------------------------
 	// BSCullingProcess -- powerof3 only forward-declares it (SceneGraph.h), but
-	// TTS reads/writes bCustomCullPlanes and calls SetCustomCullPlanes().
+	// TTS reads/writes bCustomCullPlanes and the custom plane set.
 	// ------------------------------------------------------------------------
 	class BSCullingProcess
 	{
 	public:
 		bool            bCustomCullPlanes;   // inferred
-		NiFrustumPlanes m_kPlanes;           // inferred (target of SetCustomCullPlanes)
+		NiFrustumPlanes kCustomCullPlanes;   // inferred (TTS's member name)
 
 		void SetCustomCullPlanes(const NiFrustumPlanes* a_planes)
 		{
-			if (a_planes) { m_kPlanes = *a_planes; bCustomCullPlanes = true; }
+			if (a_planes) { kCustomCullPlanes = *a_planes; bCustomCullPlanes = true; }
 		}
 	};
 
 	// ------------------------------------------------------------------------
-	// BSShaderManagerState -- TTS only uses it as a Relocation<BSShaderManagerState**>
-	// template argument and never dereferences members. An opaque tag is enough.
+	// BSRenderPass -- only forward-declared in powerof3 (BSShaderProperty.h:11).
+	// TTS touches pGeometry only, so one member is enough.
 	// ------------------------------------------------------------------------
-	class BSShaderManagerState;
+	class BSRenderPass
+	{
+	public:
+		BSGeometry* pGeometry;   // inferred
+	};
+
+	// ------------------------------------------------------------------------
+	// BSShaderManagerState -- absent from every public revision. TTS reads and
+	// writes four ambient-light fields whose types come straight from
+	// ThroughScope::AmbientLightStateBackup (LightBackupSystem.h:16-29).
+	// ------------------------------------------------------------------------
+	class BSShaderManagerState
+	{
+	public:
+		NiTransform DirectionalAmbientTransform;       // inferred
+		NiTransform LocalDirectionalAmbientTransform;  // inferred
+		NiColorA    AmbientSpecular;                   // inferred
+		std::uint8_t bAmbientSpecularEnabled;          // inferred
+	};
 }
 
 // ===========================================================================
