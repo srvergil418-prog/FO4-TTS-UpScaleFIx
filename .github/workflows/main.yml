@@ -126,7 +126,7 @@ jobs:
             'RE::build_shim::LargeArrayAt(stream->topObjects, 0).get()')
           if ($nf3 -eq $nf2) { Write-Error 'NiFLoader.cpp: topObjects 未替换'; exit 1 }
           Set-Content $nif -Value $nf3 -NoNewline -Encoding utf8
-          Write-Host '  [7/8] patched NiFLoader.cpp (QShaderProperty, topObjects)'
+          Write-Host '  [7/9] patched NiFLoader.cpp (QShaderProperty, topObjects)'
 
           # --- 8) SettingsPanel.cpp：imgui 1.92 移除了 ImGuiKey_Mod* 旧名 ---
           #      1.89 起改名为 ImGuiMod_Ctrl / ImGuiMod_Shift / ImGuiMod_Alt，
@@ -138,7 +138,29 @@ jobs:
           $s3 = $s2.Replace('ImGuiKey_ModAlt', 'ImGuiMod_Alt')
           if ($s3 -eq $s) { Write-Error 'SettingsPanel.cpp 未替换'; exit 1 }
           Set-Content $set -Value $s3 -NoNewline -Encoding utf8
-          Write-Host '  [8/8] patched SettingsPanel.cpp (ImGuiMod_*)'
+          Write-Host '  [8/9] patched SettingsPanel.cpp (ImGuiMod_*)'
+
+          # --- 9) NiFrustum 成员改名：直接改源码（绝对不能用宏）---
+          #      TTS 用 .nearPlane/.farPlane，powerof3 的 NiFrustum 用 .near/.far。
+          #      #define nearPlane near 会失败：<Windows.h>（PCH 里已被拉进来）把
+          #      near/far 定义成【空宏】，别名会展开成空，于是
+          #          m_scopeFrustum.nearPlane = 15.0f;
+          #      变成 m_scopeFrustum. = 15.0f;  -> C2059。
+          #      已确认 TTS 里所有出现都是带点的成员访问，直接替换即可。
+          $tsrc = 'src/True-Through-Scope/src'
+          $changed = @()
+          Get-ChildItem -Path $tsrc -Recurse -File |
+            Where-Object { $_.Extension -in '.cpp', '.h', '.hpp' } |
+            ForEach-Object {
+              $c = Get-Content $_.FullName -Raw
+              $n = $c.Replace('.nearPlane', '.near').Replace('.farPlane', '.far')
+              if ($n -ne $c) {
+                Set-Content $_.FullName -Value $n -NoNewline -Encoding utf8
+                $changed += $_.Name
+              }
+            }
+          if ($changed.Count -eq 0) { Write-Error '.nearPlane/.farPlane 未替换'; exit 1 }
+          Write-Host ('  [9/9] patched NiFrustum member names: ' + ($changed -join ', '))
 
           Write-Host '--- 确认 patch ---'
           Select-String -Path $hv  -Pattern 'hkVector4f GetNormalized'      | ForEach-Object { '  ' + $_.Line.Trim() }
