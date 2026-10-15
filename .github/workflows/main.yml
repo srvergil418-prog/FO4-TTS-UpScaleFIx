@@ -7,7 +7,7 @@ on:
 
 env:
   VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/vcpkg-bincache
-  COMMONLIBF4_REF: 67173f8d44b9a928dbab983d25e576ac5f1e83ac
+  COMMONLIBF4_REF: master
 
 jobs:
   build:
@@ -19,10 +19,10 @@ jobs:
         with:
           path: src/True-Through-Scope
 
-      - name: Checkout CommonLibF4 (pinned version)
+      - name: Checkout CommonLibF4 (libxse branch, required API)
         uses: actions/checkout@v4
         with:
-          repository: Ryan-rsm-McKenzie/CommonLibF4
+          repository: libxse/commonlibf4
           ref: ${{ env.COMMONLIBF4_REF }}
           path: src/CommonLibF4
           clean: false
@@ -35,23 +35,16 @@ jobs:
           path: src/imgui
           clean: false
 
-      - name: Fetch F4SE SDK headers (official, required by PCH.h)
+      - name: Create F4SE.hpp shim (PCH.h uses the .hpp spelling)
         shell: pwsh
         run: |
-          $ProgressPreference = 'SilentlyContinue'
-          Invoke-WebRequest -Uri 'https://f4se.silverlock.org/beta/f4se_0_06_23.7z' `
-            -OutFile 'f4se.7z' -UserAgent 'Mozilla/5.0'
-          $sevenZip = "$env:ProgramFiles\7-Zip\7z.exe"
-          if (-not (Test-Path $sevenZip)) { $sevenZip = '7z' }
-          & $sevenZip x 'f4se.7z' -o'f4se-sdk' -y | Out-Null
-          Write-Host '--- f4se-sdk/src 顶层 ---'
-          Get-ChildItem 'f4se-sdk/src' | Select-Object Name
-          Copy-Item 'f4se-sdk/src/*' 'src/True-Through-Scope/include/' -Recurse -Force
-          Write-Host '--- 确认关键头文件已就位 ---'
-          Get-ChildItem 'src/True-Through-Scope/include' | Select-Object Name
-          if (-not (Test-Path 'src/True-Through-Scope/include/f4se/F4SE.hpp')) {
-            Write-Error 'F4SE.hpp 未找到，SDK 结构不符合预期'
-          }
+          $dir = 'src/True-Through-Scope/include/F4SE'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          $shim = Join-Path $dir 'F4SE.hpp'
+          Set-Content -Path $shim -Value "#pragma once`n#include <F4SE/F4SE.h>`n" -Encoding utf8
+          Write-Host '--- 转发头内容 ---'
+          Get-Content $shim
+          if (-not (Test-Path $shim)) { Write-Error 'F4SE.hpp 创建失败'; exit 1 }
 
       - name: Setup vcpkg (use runner-preinstalled copy)
         shell: pwsh
