@@ -1,5 +1,17 @@
 name: Build TrueThroughScope
 
+# 用法：
+#   1. 把本仓库（含 .github/workflows/build.yml）推到你的 GitHub
+#   2. 打开 Actions 标签 -> 左侧 "Build TrueThroughScope" -> 右侧 "Run workflow"
+#   3. 等几分钟，在本次运行的底部 Artifacts 下载 TrueThroughScope-fixed
+#
+# 本 workflow 在云端自动完成：
+#   - 拉取本仓库源码
+#   - 拉取 CommonLibF4（钉在固定 commit，避免上游漂移导致编译失败）
+#   - 使用 GitHub runner 预装的 vcpkg 安装依赖（已把 nlohmann-json / minhook 补进 vcpkg.json）
+#   - 用 MSVC + Ninja 编译出 TrueThroughScope.dll
+#   - 上传 DLL 作为构建产物
+
 on:
   workflow_dispatch:
   push:
@@ -7,6 +19,10 @@ on:
 
 env:
   VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/vcpkg-bincache
+  # TTS 需要 F4SE::PluginVersionData / AuthorName / CompatibleVersions 等新 API。
+  # 上游 Ryan-rsm-McKenzie/CommonLibF4 和 libxse/commonlibf4 都没有这些，
+  # 只有 powerof3/CommonLibF4 完全满足（实测 49 个所需符号命中 48 个）。
+  # 来源依据：Upscaling 项目 doodlum/fo4test 的 .gitmodules 就指向这个库。
   COMMONLIBF4_REF: master
 
 jobs:
@@ -19,6 +35,8 @@ jobs:
         with:
           path: src/True-Through-Scope
 
+      # CMakeLists.txt 用 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../CommonLibF4")
+      # 所以它必须与本项目同级
       - name: Checkout CommonLibF4 (powerof3 fork, required API)
         uses: actions/checkout@v4
         with:
@@ -27,6 +45,9 @@ jobs:
           path: src/CommonLibF4
           clean: false
 
+      # CMakeLists.txt 里 set(IMGUI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../imgui") 且
+      # 目录不存在就 FATAL_ERROR，所以必须单独拉一份 imgui 到 src/imgui
+      # 代码里定义了 IMGUI_ENABLE_DOCKING，所以要用 docking 版本
       - name: Checkout ImGui (docking, required sibling dependency)
         uses: actions/checkout@v4
         with:
@@ -34,6 +55,69 @@ jobs:
           ref: v1.92.9b-docking
           path: src/imgui
           clean: false
+
+      # 说明：TTS 的 src/PCH.h 用的是 #include "F4SE/F4SE.hpp" / "RE/Fallout.hpp" 这种
+      # .hpp 拼写，而 powerof3/CommonLibF4 提供的是 .h。转发头已随本仓库源码一起提交
+      # （见 include/F4SE/F4SE.hpp、include/RE/**），所以这里不需要额外生成。
+
+      # powerof3/CommonLibF4 有三处与「新版 MSVC / fmt / spdlog」不兼容，
+      # 都是它自身的问题，这里在 CI 里打补丁（不改 TTS 源码）：
+      #  1) hkVector4.h:  GetNormalized() 返回局部变量的非 const 引用，
+      #     老编译器放行，MSVC 18 直接报 C2440。改为按值返回（唯一正确写法）。
+      #  2) API.cpp:  REL::Version 只定义了 std::formatter，而 spdlog 用的是
+      #     fmt::formatter，两者不通用，导致 fmt 报 C2079。改用 .string()。
+      #  3) REX/REX/LOG.cpp:  有一个专收 std::wstring_view 的重载，直接把它传给
+      #     spdlog（spdlog 只接受窄字符）。旧版 spdlog 容忍，新版报 C2665。
+      #     改成先用库自带的 REX::UTF16_TO_UTF8 转成 UTF-8，再转发到窄版本重载
+      #     （这样也不会丢中文）。
+      # 自检：打印本次 checkout 到的源码状态。
+      # 如果日志里看不到 "=== 本次构建使用的 TTS commit ===" 这一段，
+      # 说明这个 workflow 文件本身还是旧版（没提交上去）。
+      # 如果看到 build-shim 不存在 / NiFrustum.hpp 是旧命名，
+      # 说明那两个文件没传上去。
+      - name: Diagnose checked-out sources
+        shell: pwsh
+        run: |
+          Write-Host '=== 本次构建使用的 TTS commit ==='
+          git -C src/True-Through-Scope log -1 --format='%H  %s  (%ci)'
+
+          Write-Host ''
+          Write-Host '=== workflow 文件自身（仓库里的那份）==='
+          $wfs = Get-ChildItem 'src/True-Through-Scope/.github/workflows' -Filter *.yml -ErrorAction SilentlyContinue
+          foreach ($w in $wfs) {
+            $y = Get-Content $w.FullName -Raw
+            $has9 = $y.Contains(".Replace('.nearPlane', '.near')")
+            Write-Host ('  ' + $w.Name + '  含 patch9(.nearPlane 替换): ' + $has9)
+          }
+
+          $shim = 'src/True-Through-Scope/build-shim/PCH.append.h'
+          Write-Host ''
+          Write-Host '=== build-shim/PCH.append.h ==='
+          if (Test-Path $shim) {
+            $s = Get-Content $shim -Raw
+            Write-Host ('  存在，约 ' + ($s -split "`n").Count + ' 行')
+            if ([regex]::IsMatch($s, '(?m)^#define nearPlane')) {
+              Write-Host '  !! 仍含生效的 #define nearPlane —— 这是旧版文件，请覆盖它'
+            } else {
+              Write-Host '  OK  不含 nearPlane 宏（新版）'
+            }
+          } else {
+            Write-Host '  !! 文件不存在 —— 请把 build-shim 文件夹上传到仓库根目录'
+          }
+
+          Write-Host ''
+          Write-Host '=== include/RE/NetImmerse/NiFrustum.hpp ==='
+          $nf = 'src/True-Through-Scope/include/RE/NetImmerse/NiFrustum.hpp'
+          if (Test-Path $nf) {
+            if (Select-String -Path $nf -Pattern 'm_kNormal' -Quiet) {
+              Write-Host '  OK  使用 TTS 命名（m_kNormal 等，新版）'
+            } else {
+              Write-Host '  !! 仍是旧命名（normal / constant）—— 请覆盖该文件'
+            }
+          } else {
+            Write-Host '  !! 文件不存在'
+          }
+          Write-Host '=== 诊断结束 ==='
 
       - name: Patch CommonLibF4 for MSVC 18 / fmt 12 / spdlog
         shell: pwsh
@@ -85,9 +169,17 @@ jobs:
             Write-Host '  [4/5] REL/Module.h 已有 IsF4/IsVR，跳过'
           }
 
-          # --- 5) NOMINMAX ---
+          # --- 5) NOMINMAX + 补 powerof3 缺失的类型前置声明 ---
           #      ScopeCamera.h 用了 std::min/std::max，而 <Windows.h> 的 min/max 宏
           #      会把它们展开掉，报 C2589 "illegal token on right side of '::'"。
+          #      在最前面定义 NOMINMAX 即可（必须在任何 Windows.h 之前）。
+          #
+          #      另外 powerof3/CommonLibF4 里没有下列类，但 TTS 只把它们用作
+          #      指针或 Relocation<T**> 的模板参数，前置声明就够，无布局风险：
+          #        RE::BSEffectShaderProperty                 (NiFLoader.h)
+          #        RE::BSGeometryListCullingProcess           (GlobalTypes.h)
+          #        RE::BSGraphics::DynamicTriShape            (HookManager.h, using namespace)
+          #        RE::BSGraphics::DynamicTriShapeDrawData    (同上)
           $pch = 'src/True-Through-Scope/src/PCH.h'
           $p = Get-Content $pch -Raw
           if ($p -notmatch 'NOMINMAX') {
@@ -96,9 +188,8 @@ jobs:
           } else {
             Write-Host '  [5/6] PCH.h 已有 NOMINMAX，跳过'
           }
-
-          # --- 6) shim 内容放在 build-shim/PCH.append.h（随仓库提交），这里只负责追加。
-          #      这样 shim 是可直接阅读 / diff 的 C++ 文件，yml 也不必内联几百行字符串拼接。
+          # shim 内容放在 build-shim/PCH.append.h（随仓库提交），这里只负责追加。
+          # 这样 shim 是可直接阅读 / diff 的 C++ 文件，yml 也不必内联几百行字符串拼接。
           $shim = 'src/True-Through-Scope/build-shim/PCH.append.h'
           if (-not (Test-Path $shim)) { Write-Error "找不到 $shim"; exit 1 }
           if ($p -notmatch 'build shim -- appended verbatim') {
@@ -126,7 +217,7 @@ jobs:
             'RE::build_shim::LargeArrayAt(stream->topObjects, 0).get()')
           if ($nf3 -eq $nf2) { Write-Error 'NiFLoader.cpp: topObjects 未替换'; exit 1 }
           Set-Content $nif -Value $nf3 -NoNewline -Encoding utf8
-          Write-Host '  [7/9] patched NiFLoader.cpp (QShaderProperty, topObjects)'
+          Write-Host '  [7/8] patched NiFLoader.cpp (QShaderProperty, topObjects)'
 
           # --- 8) SettingsPanel.cpp：imgui 1.92 移除了 ImGuiKey_Mod* 旧名 ---
           #      1.89 起改名为 ImGuiMod_Ctrl / ImGuiMod_Shift / ImGuiMod_Alt，
@@ -167,7 +258,7 @@ jobs:
           Select-String -Path $api -Pattern 'GetPluginVersion\(\).string'  | ForEach-Object { '  ' + $_.Line.Trim() }
           Select-String -Path $lg  -Pattern 'UTF16_TO_UTF8'                | ForEach-Object { '  ' + $_.Line.Trim() }
           Select-String -Path $mod -Pattern 'static bool IsF4'             | ForEach-Object { '  ' + $_.Line.Trim() }
-          Select-String -Path $pch -Pattern 'NOMINMAX|build shim'          | ForEach-Object { '  ' + $_.Line.Trim() }
+          Select-String -Path $pch -Pattern 'NOMINMAX|BSGeometryListCullingProcess' | ForEach-Object { '  ' + $_.Line.Trim() }
 
       - name: Setup vcpkg (use runner-preinstalled copy)
         shell: pwsh
