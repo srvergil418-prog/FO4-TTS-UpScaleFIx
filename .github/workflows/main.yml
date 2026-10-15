@@ -1,5 +1,17 @@
 name: Build TrueThroughScope
 
+# 用法：
+#   1. 把本仓库（含 .github/workflows/main.yml）推到你的 GitHub
+#   2. 打开 Actions 标签 -> 左侧 "Build TrueThroughScope" -> 右侧 "Run workflow"
+#   3. 等几分钟，在本次运行的底部 Artifacts 下载 TrueThroughScope-fixed
+#
+# 本 workflow 在云端自动完成：
+#   - 拉取本仓库源码
+#   - 拉取 CommonLibF4（钉在固定 commit，避免上游漂移导致编译失败）
+#   - 使用 GitHub runner 预装的 vcpkg 安装依赖（已把 nlohmann-json / minhook 补进 vcpkg.json）
+#   - 用 MSVC + Ninja 编译出 TrueThroughScope.dll
+#   - 上传 DLL 作为构建产物
+
 on:
   workflow_dispatch:
   push:
@@ -48,11 +60,17 @@ jobs:
         with:
           arch: x64
 
+      - name: Verify build tools
+        shell: pwsh
+        run: |
+          cmake --version
+          ninja --version
+
       - name: Configure CMake
         shell: pwsh
         run: |
-          cmake -B build -S src/True-Through-Scope `
-            -G "Visual Studio 17 2022" -A x64 `
+          cmake -B build -S src/True-Through-Scope -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
             -DCOPY_BUILD=OFF `
             -DVCPKG_TARGET_TRIPLET=x64-windows-static-md `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
