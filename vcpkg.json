@@ -1,0 +1,27 @@
+{
+  "name": "truethroughscope",
+  "version-string": "1.0.0",
+  "description": "True Through Scope with upscaling (DLSS/FSR/XeSS) compatibility fix",
+  "homepage": "https://github.com/ss7332337/True-Through-Scope",
+  "license": "MIT",
+  "dependencies": [
+    "args",
+    "boost-stl-interfaces",
+    "catch2",
+    "detours",
+    "fmt",
+    "frozen",
+    "minhook",
+    "nlohmann-json",
+    "nowide",
+    "robin-hood-hashing",
+    "rsm-mmio",
+    "spdlog",
+    "srell",
+    "xbyak",
+    {
+      "name": "imgui",
+      "features": ["docking-experimental"]
+    }
+  ]
+}
