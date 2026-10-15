@@ -125,14 +125,25 @@ namespace REL
 // ===========================================================================
 
 // ---------------------------------------------------------------------------
-// 1) NiFrustum member aliases.
-// TTS spells these nearPlane/farPlane; powerof3 spells them near/far. Every
-// occurrence in TTS is a member access (verified: no standalone nearPlane or
-// farPlane local exists), and near/far are not macros in the modern Windows SDK
-// (powerof3 itself compiles them as member names), so aliasing is safe.
+// 1) NiFrustum member names -- handled by a SOURCE PATCH, deliberately NOT a macro.
+//
+// TTS spells these nearPlane/farPlane; powerof3 spells them near/far.
+//
+// A "#define nearPlane near" alias does NOT work here. <Windows.h> -- which the
+// TTS PCH pulls in -- defines near and far as *empty* macros, so the alias would
+// expand to nothing and turn
+//     m_scopeFrustum.nearPlane = 15.0f;
+// into
+//     m_scopeFrustum.          = 15.0f;      -> C2059
+//
+// (powerof3's own NiFrustum.h gets away with "float near;" only because it is
+//  included before <Windows.h>; our alias would be expanded much later.)
+//
+// The CI patch step therefore rewrites ".nearPlane" -> ".near" and
+// ".farPlane" -> ".far" directly in the three affected TTS sources. Every
+// occurrence in TTS is a member access preceded by a dot, so the rewrite is
+// unambiguous.
 // ---------------------------------------------------------------------------
-#define nearPlane near
-#define farPlane  far
 
 // ---------------------------------------------------------------------------
 // 2) TARGET_PERSISTENCY / SetRenderTargetMode.
