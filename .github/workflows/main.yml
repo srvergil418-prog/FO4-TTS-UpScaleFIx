@@ -7,7 +7,7 @@ on:
 
 env:
   VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/vcpkg-bincache
-  COMMONLIBF4_REF: 67173f8d44b9858e3fbbe3f4a3eaef4a1b0957c1
+  COMMONLIBF4_REF: 67173f8d44b9a928dbab983d25e576ac5f1e83ac
 
 jobs:
   build:
