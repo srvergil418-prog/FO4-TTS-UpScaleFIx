@@ -19,10 +19,10 @@ jobs:
         with:
           path: src/True-Through-Scope
 
-      - name: Checkout CommonLibF4 (libxse branch, required API)
+      - name: Checkout CommonLibF4 (powerof3 fork, required API)
         uses: actions/checkout@v4
         with:
-          repository: libxse/commonlibf4
+          repository: powerof3/CommonLibF4
           ref: ${{ env.COMMONLIBF4_REF }}
           path: src/CommonLibF4
           clean: false
@@ -34,17 +34,6 @@ jobs:
           ref: v1.92.9b-docking
           path: src/imgui
           clean: false
-
-      - name: Create F4SE.hpp shim (PCH.h uses the .hpp spelling)
-        shell: pwsh
-        run: |
-          $dir = 'src/True-Through-Scope/include/F4SE'
-          New-Item -ItemType Directory -Force -Path $dir | Out-Null
-          $shim = Join-Path $dir 'F4SE.hpp'
-          Set-Content -Path $shim -Value "#pragma once`n#include <F4SE/F4SE.h>`n" -Encoding utf8
-          Write-Host '--- 转发头内容 ---'
-          Get-Content $shim
-          if (-not (Test-Path $shim)) { Write-Error 'F4SE.hpp 创建失败'; exit 1 }
 
       - name: Setup vcpkg (use runner-preinstalled copy)
         shell: pwsh
