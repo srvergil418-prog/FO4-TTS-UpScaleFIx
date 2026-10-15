@@ -46,17 +46,24 @@ set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_DEBUG OFF)
 
 set(Boost_USE_STATIC_LIBS ON)
 
-if(CMAKE_SIZEOF_VOID_P EQUAL 8)
-    add_definitions(-D_AMD64_ -D_WIN64)
-else()
-    add_definitions(-D_X86_)
-endif()
-
 project(
 	TrueThroughScope
 	VERSION 0.0.1
 	LANGUAGES CXX
 )
+
+# [FIX] CMAKE_SIZEOF_VOID_P is only set AFTER project(), so the original check
+#       (which ran before project()) always evaluated false and fell into the
+#       else() branch, adding -D_X86_ even to 64-bit builds.
+#       With current Windows SDKs that makes winnt.h / winbase.h look for
+#       x86-only intrinsics (_InterlockedIncrement, __readgsqword, ...) which do
+#       not exist on x64, producing hundreds of C3861 errors.
+#       Moved below project() and made the 32-bit branch explicit.
+if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+    add_definitions(-D_AMD64_ -D_WIN64)
+elseif(CMAKE_SIZEOF_VOID_P EQUAL 4)
+    add_definitions(-D_X86_)
+endif()
 
 find_package(spdlog REQUIRED CONFIG)
 #cfind_package(imgui REQUIRED CONFIG)
@@ -291,4 +298,3 @@ source_group(
 	TREE ${CMAKE_CURRENT_SOURCE_DIR}
 	FILES ${SCRIPT}
 )
-
