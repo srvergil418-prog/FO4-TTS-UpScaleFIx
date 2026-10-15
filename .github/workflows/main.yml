@@ -1,16 +1,15 @@
 name: Build TrueThroughScope
 
-# 用法：
-#   1. 把本仓库（含 .github/workflows/build.yml）推到你的 GitHub
-#   2. 打开 Actions 标签 -> 左侧 "Build TrueThroughScope" -> 右侧 "Run workflow"
-#   3. 等几分钟，在本次运行的底部 Artifacts 下载 TrueThroughScope-fixed
+# ---------------------------------------------------------------------------
+# This workflow is only an ENTRY POINT.
 #
-# 本 workflow 在云端自动完成：
-#   - 拉取本仓库源码
-#   - 拉取 CommonLibF4（钉在固定 commit，避免上游漂移导致编译失败）
-#   - 使用 GitHub runner 预装的 vcpkg 安装依赖（已把 nlohmann-json / minhook 补进 vcpkg.json）
-#   - 用 MSVC + Ninja 编译出 TrueThroughScope.dll
-#   - 上传 DLL 作为构建产物
+# All compatibility patches and the CMake/Ninja build live in
+#     ci/build.ps1        (logic)
+#     ci/PCH.append.h     (C++ shim appended to PCH.h)
+#
+# Editing those two files is enough for almost any future change -- this YAML
+# rarely needs to be touched.
+# ---------------------------------------------------------------------------
 
 on:
   workflow_dispatch:
@@ -19,10 +18,10 @@ on:
 
 env:
   VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/vcpkg-bincache
-  # TTS 需要 F4SE::PluginVersionData / AuthorName / CompatibleVersions 等新 API。
-  # 上游 Ryan-rsm-McKenzie/CommonLibF4 和 libxse/commonlibf4 都没有这些，
-  # 只有 powerof3/CommonLibF4 完全满足（实测 49 个所需符号命中 48 个）。
-  # 来源依据：Upscaling 项目 doodlum/fo4test 的 .gitmodules 就指向这个库。
+  # TTS needs F4SE::PluginVersionData / AuthorName / CompatibleVersions, which
+  # upstream Ryan-rsm-McKenzie/CommonLibF4 and libxse/commonlibf4 both lack.
+  # powerof3/CommonLibF4 is the closest public match (the Upscaling project
+  # doodlum/fo4test points at it via .gitmodules).
   COMMONLIBF4_REF: master
 
 jobs:
@@ -30,13 +29,24 @@ jobs:
     runs-on: windows-latest
 
     steps:
+      # Unique marker: if this never appears in the log, the workflow file you
+      # are looking at is NOT the one that ran.
+      - name: Workflow revision marker
+        shell: pwsh
+        run: |
+          Write-Host '=================================================='
+          Write-Host 'TTS_WORKFLOW_MARKER_CI_SCRIPT_02'
+          Write-Host '=================================================='
+          Write-Host "workflow_ref : ${{ github.workflow_ref }}"
+          Write-Host "sha          : ${{ github.sha }}"
+          Write-Host "ref_name     : ${{ github.ref_name }}"
+          Write-Host "run_id       : ${{ github.run_id }}"
+
       - name: Checkout True-Through-Scope (this repo)
         uses: actions/checkout@v4
         with:
           path: src/True-Through-Scope
 
-      # CMakeLists.txt 用 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../CommonLibF4")
-      # 所以它必须与本项目同级
       - name: Checkout CommonLibF4 (powerof3 fork, required API)
         uses: actions/checkout@v4
         with:
@@ -45,9 +55,8 @@ jobs:
           path: src/CommonLibF4
           clean: false
 
-      # CMakeLists.txt 里 set(IMGUI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../imgui") 且
-      # 目录不存在就 FATAL_ERROR，所以必须单独拉一份 imgui 到 src/imgui
-      # 代码里定义了 IMGUI_ENABLE_DOCKING，所以要用 docking 版本
+      # CMakeLists.txt hard-errors when ../imgui is absent; TTS defines
+      # IMGUI_ENABLE_DOCKING, so the docking branch is required.
       - name: Checkout ImGui (docking, required sibling dependency)
         uses: actions/checkout@v4
         with:
@@ -56,476 +65,13 @@ jobs:
           path: src/imgui
           clean: false
 
-      # 说明：TTS 的 src/PCH.h 用的是 #include "F4SE/F4SE.hpp" / "RE/Fallout.hpp" 这种
-      # .hpp 拼写，而 powerof3/CommonLibF4 提供的是 .h。转发头已随本仓库源码一起提交
-      # （见 include/F4SE/F4SE.hpp、include/RE/**），所以这里不需要额外生成。
-
-      # powerof3/CommonLibF4 有三处与「新版 MSVC / fmt / spdlog」不兼容，
-      # 都是它自身的问题，这里在 CI 里打补丁（不改 TTS 源码）：
-      #  1) hkVector4.h:  GetNormalized() 返回局部变量的非 const 引用，
-      #     老编译器放行，MSVC 18 直接报 C2440。改为按值返回（唯一正确写法）。
-      #  2) API.cpp:  REL::Version 只定义了 std::formatter，而 spdlog 用的是
-      #     fmt::formatter，两者不通用，导致 fmt 报 C2079。改用 .string()。
-      #  3) REX/REX/LOG.cpp:  有一个专收 std::wstring_view 的重载，直接把它传给
-      #     spdlog（spdlog 只接受窄字符）。旧版 spdlog 容忍，新版报 C2665。
-      #     改成先用库自带的 REX::UTF16_TO_UTF8 转成 UTF-8，再转发到窄版本重载
-      #     （这样也不会丢中文）。
-      # 自检：打印本次 checkout 到的源码状态。
-      # 如果日志里看不到 "=== 本次构建使用的 TTS commit ===" 这一段，
-      # 说明这个 workflow 文件本身还是旧版（没提交上去）。
-      # 如果看到 NiFrustum.hpp 是旧命名，说明 include/ 那个文件没覆盖成功。
-      - name: Diagnose checked-out sources
+      - name: Show checked-out revision
         shell: pwsh
         run: |
-          Write-Host '=== 本次构建使用的 TTS commit ==='
-          git -C src/True-Through-Scope log -1 --format='%H  %s  (%ci)'
-
-          Write-Host ''
-          Write-Host '=== workflow 文件自身（仓库里的那份）==='
-          $wfs = Get-ChildItem 'src/True-Through-Scope/.github/workflows' -Filter *.yml -ErrorAction SilentlyContinue
-          foreach ($w in $wfs) {
-            $y = Get-Content $w.FullName -Raw
-            $has9 = $y.Contains(".Replace('.nearPlane', '.near')")
-            Write-Host ('  ' + $w.Name + '  含 patch9(.nearPlane 替换): ' + $has9)
-          }
-          Write-Host ''
-          Write-Host '=== include/RE/NetImmerse/NiFrustum.hpp ==='
-          $nf = 'src/True-Through-Scope/include/RE/NetImmerse/NiFrustum.hpp'
-          if (Test-Path $nf) {
-            if (Select-String -Path $nf -Pattern 'm_kNormal' -Quiet) {
-              Write-Host '  OK  使用 TTS 命名（m_kNormal 等，新版）'
-            } else {
-              Write-Host '  !! 仍是旧命名（normal / constant）—— 请覆盖该文件'
-            }
-          } else {
-            Write-Host '  !! 文件不存在'
-          }
-          Write-Host '=== 诊断结束 ==='
-
-      - name: Patch CommonLibF4 for MSVC 18 / fmt 12 / spdlog
-        shell: pwsh
-        run: |
-          # --- 1) hkVector4.h ---
-          $hv = 'src/CommonLibF4/CommonLibF4/include/RE/Havok/hkVector4.h'
-          $t = Get-Content $hv -Raw
-          $t2 = $t.Replace('hkVector4f& GetNormalized()', 'hkVector4f GetNormalized()')
-          if ($t2 -eq $t) { Write-Error 'hkVector4.h 未替换'; exit 1 }
-          Set-Content $hv -Value $t2 -NoNewline -Encoding utf8
-          Write-Host '  [1/3] patched hkVector4.h'
-
-          # --- 2) API.cpp ---
-          $api = 'src/CommonLibF4/CommonLibF4/src/F4SE/API.cpp'
-          $a = Get-Content $api -Raw
-          $a2 = $a.Replace(
-            'log::info("{} v{}", GetPluginName(), GetPluginVersion());',
-            'log::info("{} v{}", GetPluginName(), GetPluginVersion().string());')
-          if ($a2 -eq $a) { Write-Error 'API.cpp 未替换'; exit 1 }
-          Set-Content $api -Value $a2 -NoNewline -Encoding utf8
-          Write-Host '  [2/3] patched API.cpp'
-
-          # --- 3) REX/REX/LOG.cpp（宽字符串重载改成转 UTF-8 后转发）---
-          $lg = 'src/CommonLibF4/CommonLibF4/src/REX/REX/LOG.cpp'
-          $g = Get-Content $lg -Raw
-          if ($g -notmatch 'REX/REX/CONVERT\.h') {
-            $g = $g.Replace('#include "REX/W32/USER32.h"',
-                            "#include `"REX/W32/USER32.h`"`r`n#include `"REX/REX/CONVERT.h`"")
-          }
-          $rx = [regex]'(?s)void LOG\(const std::source_location a_loc, const LOG_LEVEL a_level, const std::wstring_view a_fmt\)\s*\{.*?\r?\n\t\}'
-          $m = $rx.Match($g)
-          if (-not $m.Success) { Write-Error 'LOG.cpp 宽字符串重载未匹配到'; exit 1 }
-          $repl = "void LOG(const std::source_location a_loc, const LOG_LEVEL a_level, const std::wstring_view a_fmt)`r`n`t{`r`n`t`t// spdlog only accepts narrow chars; convert UTF-16 -> UTF-8 first`r`n`t`tstd::string narrow;`r`n`t`tif (!REX::UTF16_TO_UTF8(a_fmt, narrow)) {`r`n`t`t`tnarrow = `"<encoding error>`";`r`n`t`t}`r`n`t`tLOG(a_loc, a_level, std::string_view{ narrow });`r`n`t}"
-          $g2 = $g.Remove($m.Index, $m.Length).Insert($m.Index, $repl)
-          if ($g2 -eq $g) { Write-Error 'LOG.cpp 未发生替换'; exit 1 }
-          Set-Content $lg -Value $g2 -NoNewline -Encoding utf8
-          Write-Host '  [3/3] patched REX/REX/LOG.cpp'
-
-          # --- 4) REL/Module.h：补 IsF4()/IsVR()（powerof3 版本没有这两个静态方法）---
-          #      本构建目标固定为桌面版（非 VR），直接返回常量即可。
-          $mod = 'src/CommonLibF4/CommonLibF4/include/REL/Module.h'
-          $m = Get-Content $mod -Raw
-          if ($m -notmatch 'static bool IsF4') {
-            $m2 = $m -replace '(class\s+Module\s*\{)', "`$1`r`n`tpublic:`r`n`t`t// Added by build shim: this build targets the desktop (non-VR) runtime.`r`n`t`t[[nodiscard]] static bool IsF4() { return true; }`r`n`t`t[[nodiscard]] static bool IsVR() { return false; }"
-            if ($m2 -eq $m) { Write-Error 'REL/Module.h 未能插入 IsF4/IsVR'; exit 1 }
-            Set-Content $mod -Value $m2 -NoNewline -Encoding utf8
-            Write-Host '  [4/5] patched REL/Module.h (IsF4/IsVR)'
-          } else {
-            Write-Host '  [4/5] REL/Module.h 已有 IsF4/IsVR，跳过'
-          }
-
-          # --- 5) NOMINMAX + 补 powerof3 缺失的类型前置声明 ---
-          #      ScopeCamera.h 用了 std::min/std::max，而 <Windows.h> 的 min/max 宏
-          #      会把它们展开掉，报 C2589 "illegal token on right side of '::'"。
-          #      在最前面定义 NOMINMAX 即可（必须在任何 Windows.h 之前）。
-          #
-          #      另外 powerof3/CommonLibF4 里没有下列类，但 TTS 只把它们用作
-          #      指针或 Relocation<T**> 的模板参数，前置声明就够，无布局风险：
-          #        RE::BSEffectShaderProperty                 (NiFLoader.h)
-          #        RE::BSGeometryListCullingProcess           (GlobalTypes.h)
-          #        RE::BSGraphics::DynamicTriShape            (HookManager.h, using namespace)
-          #        RE::BSGraphics::DynamicTriShapeDrawData    (同上)
-          $pch = 'src/True-Through-Scope/src/PCH.h'
-          $p = Get-Content $pch -Raw
-          if ($p -notmatch 'NOMINMAX') {
-            $p = "#define NOMINMAX`r`n" + $p
-            Write-Host '  [5/6] PCH.h += NOMINMAX'
-          } else {
-            Write-Host '  [5/6] PCH.h 已有 NOMINMAX，跳过'
-          }
-          # --- 6) build shim：直接追加到 PCH.h 末尾 ---
-          #      内容内联在这里（不再引用 build-shim/PCH.append.h），
-          #      这样整套方案只需要改动这一个 workflow 文件。
-          if ($p -notmatch 'build shim -- appended verbatim') {
-            $fwd = ""
-            $fwd += "// ============================================================================`r`n"
-            $fwd += "// build shim -- appended verbatim to True-Through-Scope/src/PCH.h by CI`r`n"
-            $fwd += "// ----------------------------------------------------------------------------`r`n"
-            $fwd += "// Everything below adapts TTS's source to powerof3/CommonLibF4, whose API`r`n"
-            $fwd += "// differs from the (private) library the author used. Appending to PCH.h means`r`n"
-            $fwd += "// it is expanded before every TTS header, so these declarations are always`r`n"
-            $fwd += "// visible without editing a single TTS source file.`r`n"
-            $fwd += "//`r`n"
-            $fwd += "// !! Items marked INFERRED are reconstructed from TTS's usage, not from a`r`n"
-            $fwd += "// !! binary-verified definition. See the notes on each one.`r`n"
-            $fwd += "// ============================================================================`r`n"
-            $fwd += "`r`n"
-            $fwd += "#include <RE/NetImmerse/NiFrustum.hpp>`r`n"
-            $fwd += "#include <RE/NetImmerse/NiCamera.h>`r`n"
-            $fwd += "#include <RE/NetImmerse/NiStream.h>`r`n"
-            $fwd += "#include <RE/NetImmerse/NiShadeProperty.h>`r`n"
-            $fwd += "#include <RE/NetImmerse/NiTLargeArray.h>`r`n"
-            $fwd += "`r`n"
-            $fwd += "// ---------------------------------------------------------------------------`r`n"
-            $fwd += "// Forward declarations for types absent from powerof3/CommonLibF4.`r`n"
-            $fwd += "// TTS only ever uses these as pointers, so a declaration is enough.`r`n"
-            $fwd += "// ---------------------------------------------------------------------------`r`n"
-            $fwd += "namespace RE`r`n"
-            $fwd += "{`r`n"
-            $fwd += "	class BSEffectShaderProperty;`r`n"
-            $fwd += "	class BSGeometryListCullingProcess;`r`n"
-            $fwd += "	class BSCullingProcess;`r`n"
-            $fwd += "`r`n"
-            $fwd += "	namespace BSGraphics`r`n"
-            $fwd += "	{`r`n"
-            $fwd += "		class DynamicTriShape;`r`n"
-            $fwd += "		class DynamicTriShapeDrawData;`r`n"
-            $fwd += "	}`r`n"
-            $fwd += "`r`n"
-            $fwd += "	// ------------------------------------------------------------------------`r`n"
-            $fwd += "	// BSLight`r`n"
-            $fwd += "	// No public CommonLibF4 revision defines this class (powerof3 and libxse`r`n"
-            $fwd += "	// both only forward-declare it), yet TTS needs:`r`n"
-            $fwd += "	//   (a) NiPointer<BSLight> to be destructible, and`r`n"
-            $fwd += "	//   (b) seven members, used by LightBackupSystem to save/restore indoor lights.`r`n"
-            $fwd += "	//`r`n"
-            $fwd += "	// !! INFERRED LAYOUT -- NOT BINARY-VERIFIED !!`r`n"
-            $fwd += "	// The member order follows the order TTS touches them. If the offsets are`r`n"
-            $fwd += "	// wrong the consequence is inaccurate light backup/restore (a wrong POD`r`n"
-            $fwd += "	// value is read and written back), NOT a crash: the base chain`r`n"
-            $fwd += "	// (NiAVObject -> NiObject -> NiRefObject) supplies the virtual destructor,`r`n"
-            $fwd += "	// so the NiPointer teardown path stays valid.`r`n"
-            $fwd += "	// ------------------------------------------------------------------------`r`n"
-            $fwd += "	class BSLight : public NiAVObject`r`n"
-            $fwd += "	{`r`n"
-            $fwd += "	public:`r`n"
-            $fwd += "		std::uint16_t       usFrustumCull;    // inferred`r`n"
-            $fwd += "		bool                bOccluded;        // inferred`r`n"
-            $fwd += "		bool                bTemporary;       // inferred`r`n"
-            $fwd += "		bool                bDynamicLight;    // inferred`r`n"
-            $fwd += "		float               fLODDimmer;       // inferred`r`n"
-            $fwd += "		NiPointer<NiCamera> spCamera;         // inferred`r`n"
-            $fwd += "		BSCullingProcess*   pCullingProcess;  // inferred`r`n"
-            $fwd += "`r`n"
-            $fwd += "		// --- setters called by LightBackupSystem::RestoreLightState ---`r`n"
-            $fwd += "		void SetOccluded(bool a_v) { bOccluded = a_v; }`r`n"
-            $fwd += "		void SetTemporary(bool a_v) { bTemporary = a_v; }`r`n"
-            $fwd += "		void SetDynamic(bool a_v) { bDynamicLight = a_v; }`r`n"
-            $fwd += "		void SetCullingProcess(BSCullingProcess* a_v) { pCullingProcess = a_v; }`r`n"
-            $fwd += "		void SetLODFade(bool a_v) { fLODDimmer = a_v ? 1.0f : 0.0f; }`r`n"
-            $fwd += "`r`n"
-            $fwd += "		// The five flag setters below would act on the engine's lightFlags`r`n"
-            $fwd += "		// bitfield, whose bit layout is unknown here. They are deliberately`r`n"
-            $fwd += "		// no-ops instead of guesses: writing the wrong bit would corrupt real`r`n"
-            $fwd += "		// light state, whereas a no-op only leaves this flag unrestored.`r`n"
-            $fwd += "		void SetAffectLand(bool) {}`r`n"
-            $fwd += "		void SetAffectWater(bool) {}`r`n"
-            $fwd += "		void SetIgnoreRoughness(bool) {}`r`n"
-            $fwd += "		void SetIgnoreRim(bool) {}`r`n"
-            $fwd += "		void SetAttenuationOnly(bool) {}`r`n"
-            $fwd += "	};`r`n"
-            $fwd += "`r`n"
-            $fwd += "	// ------------------------------------------------------------------------`r`n"
-            $fwd += "	// BSEffectShaderProperty`r`n"
-            $fwd += "	// powerof3 only has the *Controller* variants. TTS uses this type for an`r`n"
-            $fwd += "	// RTTI id comparison and a static_cast, and the consuming routine`r`n"
-            $fwd += "	// (ProcessBSEffectShaderProperty) is an empty placeholder, so merely having`r`n"
-            $fwd += "	// the type is enough -- it is never instantiated.`r`n"
-            $fwd += "	// ------------------------------------------------------------------------`r`n"
-            $fwd += "	class BSEffectShaderProperty : public NiShadeProperty {};`r`n"
-            $fwd += "`r`n"
-            $fwd += "	// ------------------------------------------------------------------------`r`n"
-            $fwd += "	// BSStream`r`n"
-            $fwd += "	// powerof3 calls this class NiStream. TTS uses the newer name and also calls`r`n"
-            $fwd += "	// the static factory BSStream::Create(), which NiStream lacks. NiStream`r`n"
-            $fwd += "	// already provides a virtual destructor, Load(const char*) and the`r`n"
-            $fwd += "	// topObjects member, so a thin wrapper is enough.`r`n"
-            $fwd += "	// ------------------------------------------------------------------------`r`n"
-            $fwd += "	class BSStream : public NiStream`r`n"
-            $fwd += "	{`r`n"
-            $fwd += "	public:`r`n"
-            $fwd += "		static BSStream* Create() { return new BSStream(); }`r`n"
-            $fwd += "	};`r`n"
-            $fwd += "}`r`n"
-            $fwd += "`r`n"
-            $fwd += "// ---------------------------------------------------------------------------`r`n"
-            $fwd += "// REL::RelocationID(aeID, ngID)`r`n"
-            $fwd += "// A newer CommonLibF4 API carrying both the AE and NG Address Library IDs.`r`n"
-            $fwd += "// powerof3 only has the single-ID REL::ID. This build targets 1.10.163, so the`r`n"
-            $fwd += "// first argument is the one to use.`r`n"
-            $fwd += "// ---------------------------------------------------------------------------`r`n"
-            $fwd += "namespace REL`r`n"
-            $fwd += "{`r`n"
-            $fwd += "	class RelocationID`r`n"
-            $fwd += "	{`r`n"
-            $fwd += "	public:`r`n"
-            $fwd += "		constexpr RelocationID(std::uint64_t a_aeID, std::uint64_t) noexcept :`r`n"
-            $fwd += "			_id{ a_aeID }`r`n"
-            $fwd += "		{}`r`n"
-            $fwd += "`r`n"
-            $fwd += "		[[nodiscard]] constexpr operator ID() const noexcept { return ID{ _id }; }`r`n"
-            $fwd += "`r`n"
-            $fwd += "	private:`r`n"
-            $fwd += "		std::uint64_t _id;`r`n"
-            $fwd += "	};`r`n"
-            $fwd += "}`r`n"
-            $fwd += "`r`n"
-            $fwd += "// ===========================================================================`r`n"
-            $fwd += "// A-class API differences: names / constants only, no layout guessing.`r`n"
-            $fwd += "// ===========================================================================`r`n"
-            $fwd += "`r`n"
-            $fwd += "// ---------------------------------------------------------------------------`r`n"
-            $fwd += "// 1) NiFrustum member names -- handled by a SOURCE PATCH, deliberately NOT a macro.`r`n"
-            $fwd += "//`r`n"
-            $fwd += "// TTS spells these nearPlane/farPlane; powerof3 spells them near/far.`r`n"
-            $fwd += "//`r`n"
-            $fwd += "// A `"#define nearPlane near`" alias does NOT work here. <Windows.h> -- which the`r`n"
-            $fwd += "// TTS PCH pulls in -- defines near and far as *empty* macros, so the alias would`r`n"
-            $fwd += "// expand to nothing and turn`r`n"
-            $fwd += "//     m_scopeFrustum.nearPlane = 15.0f;`r`n"
-            $fwd += "// into`r`n"
-            $fwd += "//     m_scopeFrustum.          = 15.0f;      -> C2059`r`n"
-            $fwd += "//`r`n"
-            $fwd += "// (powerof3's own NiFrustum.h gets away with `"float near;`" only because it is`r`n"
-            $fwd += "//  included before <Windows.h>; our alias would be expanded much later.)`r`n"
-            $fwd += "//`r`n"
-            $fwd += "// The CI patch step therefore rewrites `".nearPlane`" -> `".near`" and`r`n"
-            $fwd += "// `".farPlane`" -> `".far`" directly in the three affected TTS sources. Every`r`n"
-            $fwd += "// occurrence in TTS is a member access preceded by a dot, so the rewrite is`r`n"
-            $fwd += "// unambiguous.`r`n"
-            $fwd += "// ---------------------------------------------------------------------------`r`n"
-            $fwd += "`r`n"
-            $fwd += "// ---------------------------------------------------------------------------`r`n"
-            $fwd += "// 2) TARGET_PERSISTENCY / SetRenderTargetMode.`r`n"
-            $fwd += "// HookManager.h uses both by bare name but never includes BSGraphics.hpp, so`r`n"
-            $fwd += "// they have to come from the PCH. The shared include guard lets`r`n"
-            $fwd += "// include/RE/Bethesda/BSGraphics.hpp define them too without clashing.`r`n"
-            $fwd += "// ---------------------------------------------------------------------------`r`n"
-            $fwd += "#ifndef TTS_BUILD_SHIM_BSGRAPHICS_ENUMS`r`n"
-            $fwd += "#define TTS_BUILD_SHIM_BSGRAPHICS_ENUMS`r`n"
-            $fwd += "namespace RE`r`n"
-            $fwd += "{`r`n"
-            $fwd += "	namespace BSGraphics`r`n"
-            $fwd += "	{`r`n"
-            $fwd += "		// ported from libxse/commonlibf4@main (RE/B/BSGraphics.h)`r`n"
-            $fwd += "		enum class SetRenderTargetMode : std::int32_t`r`n"
-            $fwd += "		{`r`n"
-            $fwd += "			kClear = 0x0,`r`n"
-            $fwd += "			kClearDepth = 0x1,`r`n"
-            $fwd += "			kClearStencil = 0x2,`r`n"
-            $fwd += "			kNoClear = 0x3,`r`n"
-            $fwd += "			kRestore = 0x3,`r`n"
-            $fwd += "			kForceCopyRestore = 0x4,`r`n"
-            $fwd += "			kInit = 0x5`r`n"
-            $fwd += "		};`r`n"
-            $fwd += "`r`n"
-            $fwd += "		// Only ever received as a hook parameter; TTS never constructs one, so`r`n"
-            $fwd += "		// the specific enumerator values carry no behavioural risk.`r`n"
-            $fwd += "		enum class TARGET_PERSISTENCY : std::int32_t`r`n"
-            $fwd += "		{`r`n"
-            $fwd += "			kNone = 0x0,`r`n"
-            $fwd += "			kPosition = 0x1,`r`n"
-            $fwd += "			kColor = 0x2,`r`n"
-            $fwd += "			kNormals = 0x3,`r`n"
-            $fwd += "			kDepth = 0x4,`r`n"
-            $fwd += "			kStencil = 0x5,`r`n"
-            $fwd += "			kCount`r`n"
-            $fwd += "		};`r`n"
-            $fwd += "	}`r`n"
-            $fwd += "`r`n"
-            $fwd += "	using BSGraphics::SetRenderTargetMode;`r`n"
-            $fwd += "	using BSGraphics::TARGET_PERSISTENCY;`r`n"
-            $fwd += "}`r`n"
-            $fwd += "#endif`r`n"
-            $fwd += "`r`n"
-            $fwd += "// ---------------------------------------------------------------------------`r`n"
-            $fwd += "// 3) LargeArrayAt`r`n"
-            $fwd += "// powerof3's NiTLargeArray carries the engine layout (vtable at 0x00, _data at`r`n"
-            $fwd += "// 0x08 -- the offsets are documented in the header itself) but exposes no`r`n"
-            $fwd += "// accessors at all, while TTS's NiFLoader needs stream->topObjects[0]. Read the`r`n"
-            $fwd += "// element through that documented offset.`r`n"
-            $fwd += "// ---------------------------------------------------------------------------`r`n"
-            $fwd += "namespace RE`r`n"
-            $fwd += "{`r`n"
-            $fwd += "	namespace build_shim`r`n"
-            $fwd += "	{`r`n"
-            $fwd += "		template <class T, class Allocator>`r`n"
-            $fwd += "		[[nodiscard]] T& LargeArrayAt(NiTLargeArray<T, Allocator>& a_array, std::uint32_t a_index)`r`n"
-            $fwd += "		{`r`n"
-            $fwd += "			auto* base = reinterpret_cast<std::byte*>(&a_array);`r`n"
-            $fwd += "			auto* data = *reinterpret_cast<T**>(base + 0x08);`r`n"
-            $fwd += "			return data[a_index];`r`n"
-            $fwd += "		}`r`n"
-            $fwd += "	}`r`n"
-            $fwd += "}`r`n"
-            $fwd += "`r`n"
-            $fwd += "// ---------------------------------------------------------------------------`r`n"
-            $fwd += "// 4) NiFrustumPlanes::Set(const NiCamera*)`r`n"
-            $fwd += "// powerof3 has no such type at all, so the engine implementation is`r`n"
-            $fwd += "// unavailable. This deliberately does NOT call the author's RELID 1361032:`r`n"
-            $fwd += "// that ID comes from his private Address-Library table and would resolve to an`r`n"
-            $fwd += "// unrelated function in the 1.10.163 table (calling it would crash).`r`n"
-            $fwd += "//`r`n"
-            $fwd += "// Instead the six planes are extracted directly, using the same axis convention`r`n"
-            $fwd += "// and cross-product order as TTS's own RebuildCachedPlanes, which the author`r`n"
-            $fwd += "// derived by in-game debugging:`r`n"
-            $fwd += "//   world rows: 0 = forward, 1 = up, 2 = right`r`n"
-            $fwd += "//   plane 0 near  : normal =  forward, through camPos + forward * near`r`n"
-            $fwd += "//   plane 1 far   : normal = -forward, through camPos + forward * far`r`n"
-            $fwd += "//   plane 2 left  : normal = normalize(cross(forward*near + right*left,  up))`r`n"
-            $fwd += "//   plane 3 right : normal = normalize(cross(up, forward*near + right*right))`r`n"
-            $fwd += "//   plane 4 top   : normal = normalize(cross(forward*near + up*top,    right))`r`n"
-            $fwd += "//   plane 5 bottom: normal = normalize(cross(right, forward*near + up*bottom))`r`n"
-            $fwd += "// and the engine's sign convention is distance = dot(normal, p) - constant.`r`n"
-            $fwd += "// ---------------------------------------------------------------------------`r`n"
-            $fwd += "namespace RE`r`n"
-            $fwd += "{`r`n"
-            $fwd += "	inline void NiFrustumPlanes::Set(const NiCamera* a_camera)`r`n"
-            $fwd += "	{`r`n"
-            $fwd += "		if (!a_camera) { return; }`r`n"
-            $fwd += "`r`n"
-            $fwd += "		const auto& world = a_camera->world;`r`n"
-            $fwd += "		const auto& frust = a_camera->viewFrustum;`r`n"
-            $fwd += "`r`n"
-            $fwd += "		const NiPoint3 forward{ world.rotate.entry[0][0], world.rotate.entry[0][1], world.rotate.entry[0][2] };`r`n"
-            $fwd += "		const NiPoint3 up{ world.rotate.entry[1][0], world.rotate.entry[1][1], world.rotate.entry[1][2] };`r`n"
-            $fwd += "		const NiPoint3 right{ world.rotate.entry[2][0], world.rotate.entry[2][1], world.rotate.entry[2][2] };`r`n"
-            $fwd += "		const NiPoint3& camPos = world.translate;`r`n"
-            $fwd += "`r`n"
-            $fwd += "		auto cross = [](const NiPoint3& a, const NiPoint3& b) {`r`n"
-            $fwd += "			return NiPoint3{ a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x };`r`n"
-            $fwd += "		};`r`n"
-            $fwd += "		auto normalize = [](NiPoint3 v) {`r`n"
-            $fwd += "			const float len = std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);`r`n"
-            $fwd += "			if (len > 0.0001f) { v.x /= len; v.y /= len; v.z /= len; }`r`n"
-            $fwd += "			return v;`r`n"
-            $fwd += "		};`r`n"
-            $fwd += "		// forward*near + axis*extent -- the edge direction of one frustum side.`r`n"
-            $fwd += "		auto toward = [&](const NiPoint3& a_axis, float a_extent) {`r`n"
-            $fwd += "			return NiPoint3{ forward.x * frust.near + a_axis.x * a_extent,`r`n"
-            $fwd += "							 forward.y * frust.near + a_axis.y * a_extent,`r`n"
-            $fwd += "							 forward.z * frust.near + a_axis.z * a_extent };`r`n"
-            $fwd += "		};`r`n"
-            $fwd += "		auto onPoint = [&](NiPlane& a_plane, const NiPoint3& a_normal, const NiPoint3& a_point) {`r`n"
-            $fwd += "			a_plane.m_kNormal = a_normal;`r`n"
-            $fwd += "			a_plane.m_fConstant = a_normal.x * a_point.x + a_normal.y * a_point.y + a_normal.z * a_point.z;`r`n"
-            $fwd += "		};`r`n"
-            $fwd += "`r`n"
-            $fwd += "		const NiPoint3 nearPoint{ camPos.x + forward.x * frust.near, camPos.y + forward.y * frust.near, camPos.z + forward.z * frust.near };`r`n"
-            $fwd += "		const NiPoint3 farPoint{ camPos.x + forward.x * frust.far, camPos.y + forward.y * frust.far, camPos.z + forward.z * frust.far };`r`n"
-            $fwd += "		const NiPoint3 negForward{ -forward.x, -forward.y, -forward.z };`r`n"
-            $fwd += "`r`n"
-            $fwd += "		onPoint(m_akCullingPlanes[kNearPlane], forward, nearPoint);`r`n"
-            $fwd += "		onPoint(m_akCullingPlanes[kFarPlane], negForward, farPoint);`r`n"
-            $fwd += "		onPoint(m_akCullingPlanes[kLeftPlane], normalize(cross(toward(right, frust.left), up)), camPos);`r`n"
-            $fwd += "		onPoint(m_akCullingPlanes[kRightPlane], normalize(cross(up, toward(right, frust.right))), camPos);`r`n"
-            $fwd += "		onPoint(m_akCullingPlanes[kTopPlane], normalize(cross(toward(up, frust.top), right)), camPos);`r`n"
-            $fwd += "		onPoint(m_akCullingPlanes[kBottomPlane], normalize(cross(right, toward(up, frust.bottom))), camPos);`r`n"
-            $fwd += "`r`n"
-            $fwd += "		EnableAllPlanes();`r`n"
-            $fwd += "	}`r`n"
-            $fwd += "}`r`n"
-            $fwd += "`r`n"
-            $fwd += "#ifdef near`r`n"
-            $fwd += "#undef near`r`n"
-            $fwd += "#endif`r`n"
-            $fwd += "#ifdef far`r`n"
-            $fwd += "#undef far`r`n"
-            $fwd += "#endif`r`n"
-            $p = $p + "`r`n" + $fwd
-            Write-Host '  [6/6] PCH.h += build shim (inline)'
-          } else {
-            Write-Host '  [6/6] PCH.h 已有 shim，跳过'
-          }
-          Set-Content $pch -Value $p -NoNewline -Encoding utf8
-
-          # --- 7) NiFLoader.cpp ---
-          #   (a) QShaderProperty() 在 powerof3 的 BSTriShape 上不存在；它的返回值只用来
-          #       驱动 ProcessBSEffectShaderProperty()，而那个函数是空实现（只判断指针
-          #       非空就返回），所以给 nullptr 不改变行为。
-          #   (b) stream->topObjects[0] —— powerof3 的 NiTLargeArray 只有布局、没有任何
-          #       访问器，改用 build_shim::LargeArrayAt（按库自己标注的 _data @0x08 读）。
-          $nif = 'src/True-Through-Scope/src/NiFLoader.cpp'
-          $nf = Get-Content $nif -Raw
-          $nf2 = $nf.Replace(
-            'NiShadeProperty* shadeProperty = triShape->QShaderProperty();',
-            'NiShadeProperty* shadeProperty = nullptr;  // build shim: QShaderProperty() unavailable in powerof3')
-          if ($nf2 -eq $nf) { Write-Error 'NiFLoader.cpp: QShaderProperty 未替换'; exit 1 }
-          $nf3 = $nf2.Replace(
-            'stream->topObjects[0].get()',
-            'RE::build_shim::LargeArrayAt(stream->topObjects, 0).get()')
-          if ($nf3 -eq $nf2) { Write-Error 'NiFLoader.cpp: topObjects 未替换'; exit 1 }
-          Set-Content $nif -Value $nf3 -NoNewline -Encoding utf8
-          Write-Host '  [7/8] patched NiFLoader.cpp (QShaderProperty, topObjects)'
-
-          # --- 8) SettingsPanel.cpp：imgui 1.92 移除了 ImGuiKey_Mod* 旧名 ---
-          #      1.89 起改名为 ImGuiMod_Ctrl / ImGuiMod_Shift / ImGuiMod_Alt，
-          #      旧名受 IMGUI_DISABLE_OBSOLETE_KEYIO 控制，1.92 已彻底移除。
-          $set = 'src/True-Through-Scope/src/UI/Panels/SettingsPanel.cpp'
-          $s = Get-Content $set -Raw
-          $s1 = $s.Replace('ImGuiKey_ModCtrl', 'ImGuiMod_Ctrl')
-          $s2 = $s1.Replace('ImGuiKey_ModShift', 'ImGuiMod_Shift')
-          $s3 = $s2.Replace('ImGuiKey_ModAlt', 'ImGuiMod_Alt')
-          if ($s3 -eq $s) { Write-Error 'SettingsPanel.cpp 未替换'; exit 1 }
-          Set-Content $set -Value $s3 -NoNewline -Encoding utf8
-          Write-Host '  [8/9] patched SettingsPanel.cpp (ImGuiMod_*)'
-
-          # --- 9) NiFrustum 成员改名：直接改源码（绝对不能用宏）---
-          #      TTS 用 .nearPlane/.farPlane，powerof3 的 NiFrustum 用 .near/.far。
-          #      #define nearPlane near 会失败：<Windows.h>（PCH 里已被拉进来）把
-          #      near/far 定义成【空宏】，别名会展开成空，于是
-          #          m_scopeFrustum.nearPlane = 15.0f;
-          #      变成 m_scopeFrustum. = 15.0f;  -> C2059。
-          #      已确认 TTS 里所有出现都是带点的成员访问，直接替换即可。
-          $tsrc = 'src/True-Through-Scope/src'
-          $changed = @()
-          Get-ChildItem -Path $tsrc -Recurse -File |
-            Where-Object { $_.Extension -in '.cpp', '.h', '.hpp' } |
-            ForEach-Object {
-              $c = Get-Content $_.FullName -Raw
-              $n = $c.Replace('.nearPlane', '.near').Replace('.farPlane', '.far')
-              if ($n -ne $c) {
-                Set-Content $_.FullName -Value $n -NoNewline -Encoding utf8
-                $changed += $_.Name
-              }
-            }
-          if ($changed.Count -eq 0) { Write-Error '.nearPlane/.farPlane 未替换'; exit 1 }
-          Write-Host ('  [9/9] patched NiFrustum member names: ' + ($changed -join ', '))
-
-          Write-Host '--- 确认 patch ---'
-          Select-String -Path $hv  -Pattern 'hkVector4f GetNormalized'      | ForEach-Object { '  ' + $_.Line.Trim() }
-          Select-String -Path $api -Pattern 'GetPluginVersion\(\).string'  | ForEach-Object { '  ' + $_.Line.Trim() }
-          Select-String -Path $lg  -Pattern 'UTF16_TO_UTF8'                | ForEach-Object { '  ' + $_.Line.Trim() }
-          Select-String -Path $mod -Pattern 'static bool IsF4'             | ForEach-Object { '  ' + $_.Line.Trim() }
-          Select-String -Path $pch -Pattern 'NOMINMAX|BSGeometryListCullingProcess' | ForEach-Object { '  ' + $_.Line.Trim() }
+          git -C src/True-Through-Scope log -1 --format='TTS commit: %H  %s  (%ci)'
+          Write-Host 'ci/ contents:'
+          Get-ChildItem 'src/True-Through-Scope/ci' -ErrorAction SilentlyContinue |
+            ForEach-Object { '  ' + $_.Name + '  (' + $_.Length + ' bytes)' }
 
       - name: Setup vcpkg (use runner-preinstalled copy)
         shell: pwsh
@@ -549,38 +95,11 @@ jobs:
         with:
           arch: x64
 
-      - name: Verify build tools
+      # Everything else (patches, verification, CMake configure, Ninja build)
+      # happens inside this script.
+      - name: Build via ci/build.ps1
         shell: pwsh
-        run: |
-          cmake --version
-          ninja --version
-
-      - name: Configure CMake
-        shell: pwsh
-        run: |
-          cmake -B build -S src/True-Through-Scope -G Ninja `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DCOPY_BUILD=OFF `
-            -DVCPKG_TARGET_TRIPLET=x64-windows-static-md `
-            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
-
-      - name: Build (Release)
-        shell: pwsh
-        run: |
-          # -k 0 = keep going after errors: report ALL failures in one run instead
-          # of stopping at the first one. Exit code stays non-zero if anything failed.
-          ninja -C build -k 0
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host ''
-            Write-Host '=== 上面是全部编译错误（一次报全，不再一轮一个）==='
-            exit $LASTEXITCODE
-          }
-
-      - name: List built binaries
-        shell: pwsh
-        run: |
-          Get-ChildItem -Path build -Recurse -Include *.dll |
-            Select-Object FullName, Length | Format-Table -AutoSize
+        run: pwsh -NoProfile -File src/True-Through-Scope/ci/build.ps1
 
       - name: Upload DLL as artifact
         uses: actions/upload-artifact@v4
@@ -588,3 +107,13 @@ jobs:
           name: TrueThroughScope-fixed
           path: build/**/TrueThroughScope.dll
           if-no-files-found: error
+
+      # Even when the build fails, keep the patched sources for inspection.
+      - name: Upload patched sources on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: patched-sources
+          path: |
+            src/True-Through-Scope/src/PCH.h
+          if-no-files-found: ignore
