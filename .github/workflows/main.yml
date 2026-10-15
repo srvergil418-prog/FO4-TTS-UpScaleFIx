@@ -35,6 +35,24 @@ jobs:
           path: src/imgui
           clean: false
 
+      - name: Fetch F4SE SDK headers (official, required by PCH.h)
+        shell: pwsh
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          Invoke-WebRequest -Uri 'https://f4se.silverlock.org/beta/f4se_0_06_23.7z' `
+            -OutFile 'f4se.7z' -UserAgent 'Mozilla/5.0'
+          $sevenZip = "$env:ProgramFiles\7-Zip\7z.exe"
+          if (-not (Test-Path $sevenZip)) { $sevenZip = '7z' }
+          & $sevenZip x 'f4se.7z' -o'f4se-sdk' -y | Out-Null
+          Write-Host '--- f4se-sdk/src 顶层 ---'
+          Get-ChildItem 'f4se-sdk/src' | Select-Object Name
+          Copy-Item 'f4se-sdk/src/*' 'src/True-Through-Scope/include/' -Recurse -Force
+          Write-Host '--- 确认关键头文件已就位 ---'
+          Get-ChildItem 'src/True-Through-Scope/include' | Select-Object Name
+          if (-not (Test-Path 'src/True-Through-Scope/include/f4se/F4SE.hpp')) {
+            Write-Error 'F4SE.hpp 未找到，SDK 结构不符合预期'
+          }
+
       - name: Setup vcpkg (use runner-preinstalled copy)
         shell: pwsh
         run: |
