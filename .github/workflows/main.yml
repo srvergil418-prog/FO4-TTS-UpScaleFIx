@@ -25,6 +25,7 @@ jobs:
           repository: Ryan-rsm-McKenzie/CommonLibF4
           ref: ${{ env.COMMONLIBF4_REF }}
           path: src/CommonLibF4
+          clean: false
 
       - name: Checkout ImGui (docking, required sibling dependency)
         uses: actions/checkout@v4
@@ -32,6 +33,7 @@ jobs:
           repository: ocornut/imgui
           ref: v1.92.9b-docking
           path: src/imgui
+          clean: false
 
       - name: Setup vcpkg (use runner-preinstalled copy)
         shell: pwsh
