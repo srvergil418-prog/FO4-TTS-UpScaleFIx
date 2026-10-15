@@ -1,17 +1,5 @@
 name: Build TrueThroughScope
 
-# 用法：
-#   1. 把本仓库（含 .github/workflows/main.yml）推到你的 GitHub
-#   2. 打开 Actions 标签 -> 左侧 "Build TrueThroughScope" -> 右侧 "Run workflow"
-#   3. 等几分钟，在本次运行的底部 Artifacts 下载 TrueThroughScope-fixed
-#
-# 本 workflow 在云端自动完成：
-#   - 拉取本仓库源码
-#   - 拉取 CommonLibF4（钉在固定 commit，避免上游漂移导致编译失败）
-#   - 使用 GitHub runner 预装的 vcpkg 安装依赖（已把 nlohmann-json / minhook 补进 vcpkg.json）
-#   - 用 MSVC + Ninja 编译出 TrueThroughScope.dll
-#   - 上传 DLL 作为构建产物
-
 on:
   workflow_dispatch:
   push:
@@ -37,6 +25,13 @@ jobs:
           repository: Ryan-rsm-McKenzie/CommonLibF4
           ref: ${{ env.COMMONLIBF4_REF }}
           path: src/CommonLibF4
+
+      - name: Checkout ImGui (docking, required sibling dependency)
+        uses: actions/checkout@v4
+        with:
+          repository: ocornut/imgui
+          ref: v1.92.9b-docking
+          path: src/imgui
 
       - name: Setup vcpkg (use runner-preinstalled copy)
         shell: pwsh
