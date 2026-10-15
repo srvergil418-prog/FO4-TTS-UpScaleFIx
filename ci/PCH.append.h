@@ -257,13 +257,8 @@ namespace RE
 // ===========================================================================
 namespace RE
 {
-	// ------------------------------------------------------------------------
-	// NiPoint3A -- a 16-byte-aligned NiPoint3. TTS uses it for eye positions.
-	// ------------------------------------------------------------------------
-	struct alignas(0x10) NiPoint3A : NiPoint3
-	{
-	};
-	static_assert(sizeof(NiPoint3A) == 0x10);
+	// NOTE: NiPoint3A already exists in powerof3 (RE/NetImmerse/NiPoint.h:92,
+	// alignas(0x10) : public NiPoint3) -- do NOT redefine it here.
 
 	// ------------------------------------------------------------------------
 	// ShadowSceneNode -- TTS passes it where a NiNode* is expected
