@@ -13,6 +13,29 @@
 // NiFrustumPlanes::Set(const NiCamera*) is declared here but DEFINED in the
 // build shim (see the PCH patch step), because its body needs a complete
 // NiCamera type and NiCamera.h includes NiFrustum.h.
+// ---------------------------------------------------------------------------
+// IMPORTANT: release the near / far names from <Windows.h>.
+//
+// <Windows.h> defines near and far as *empty* macros. The library's NiFrustum.h
+// survives "float near;" only because it is included before <Windows.h>.
+//
+// TTS reaches this header from the PCH build shim, i.e. well AFTER <Windows.h>.
+// Without the #undef below, every later use of
+//     m_scopeFrustum.near = 15.0f;
+// expands to
+//     m_scopeFrustum.     = 15.0f;      -> C2059
+// which is exactly the RenderStateManager.cpp / ScopeCulling.cpp /
+// SecondPassRenderer.cpp failure we kept hitting.
+//
+// After this #undef, .near and .far are ordinary member accesses again.
+// ---------------------------------------------------------------------------
+#ifdef near
+#undef near
+#endif
+#ifdef far
+#undef far
+#endif
+
 #include <RE/NetImmerse/NiFrustum.h>
 #include <RE/NetImmerse/NiPoint.h>
 
