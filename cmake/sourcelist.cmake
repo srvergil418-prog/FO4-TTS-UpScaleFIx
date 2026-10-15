@@ -1,0 +1,33 @@
+set(SOURCES
+	src/main.cpp
+	src/RenderUtilities.cpp
+	src/ScopeCamera.cpp
+	src/D3DHooks.cpp
+	src/NiFLoader.cpp
+	src/STSCompatibility.cpp
+	src/UI/ImGuiManager.cpp
+	src/UI/Panels/CameraAdjustmentPanel.cpp
+	src/UI/Panels/DebugPanel.cpp
+	src/UI/Panels/ModelSwitcherPanel.cpp
+	src/UI/Panels/SettingsPanel.cpp
+	src/UI/Panels/ReticlePanel.cpp
+	src/UI/Panels/ZoomDataPanel.cpp
+	src/UI/Localization/LocalizationManager.cpp
+	src/EventHandler.cpp
+	src/DataPersistence.cpp
+	src/DDSTextureLoader11.cpp
+	src/HLSL/TrueScopeShader.hlsl
+	src/HookManager.cpp
+	src/TAAHook.cpp
+	src/RenderHooks.cpp
+	src/SimpleHooks.cpp
+	src/rendering/RenderStateManager.cpp
+	src/rendering/LightBackupSystem.cpp
+	src/rendering/SecondPassRenderer.cpp
+	src/rendering/D3DResourceManager.cpp
+	src/rendering/ScopeRenderingManager.cpp
+	src/rendering/RenderTargetMerger.cpp
+	src/ENBIntegration.cpp
+	src/FGCompatibility.cpp
+	src/rendering/ScopeCulling.cpp
+)
