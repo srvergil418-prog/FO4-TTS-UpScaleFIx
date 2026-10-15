@@ -44,7 +44,7 @@ jobs:
           $t2 = $t.Replace('hkVector4f& GetNormalized()', 'hkVector4f GetNormalized()')
           if ($t2 -eq $t) { Write-Error 'hkVector4.h 未替换'; exit 1 }
           Set-Content $hv -Value $t2 -NoNewline -Encoding utf8
-          Write-Host '  [1/3] patched hkVector4.h'
+          Write-Host '  [1/5] patched hkVector4.h'
 
           # --- 2) API.cpp ---
           $api = 'src/CommonLibF4/CommonLibF4/src/F4SE/API.cpp'
@@ -54,7 +54,7 @@ jobs:
             'log::info("{} v{}", GetPluginName(), GetPluginVersion().string());')
           if ($a2 -eq $a) { Write-Error 'API.cpp 未替换'; exit 1 }
           Set-Content $api -Value $a2 -NoNewline -Encoding utf8
-          Write-Host '  [2/3] patched API.cpp'
+          Write-Host '  [2/5] patched API.cpp'
 
           # --- 3) REX/REX/LOG.cpp（宽字符串重载改成转 UTF-8 后转发）---
           $lg = 'src/CommonLibF4/CommonLibF4/src/REX/REX/LOG.cpp'
@@ -70,12 +70,36 @@ jobs:
           $g2 = $g.Remove($m.Index, $m.Length).Insert($m.Index, $repl)
           if ($g2 -eq $g) { Write-Error 'LOG.cpp 未发生替换'; exit 1 }
           Set-Content $lg -Value $g2 -NoNewline -Encoding utf8
-          Write-Host '  [3/3] patched REX/REX/LOG.cpp'
+          Write-Host '  [3/5] patched REX/REX/LOG.cpp'
 
-          Write-Host '--- 确认三处 patch ---'
+          # --- 4) REL/Module.h：补 IsF4()/IsVR() ---
+          $mod = 'src/CommonLibF4/CommonLibF4/include/REL/Module.h'
+          $m = Get-Content $mod -Raw
+          if ($m -notmatch 'static bool IsF4') {
+            $m2 = $m -replace '(class\s+Module\s*\{)', "`$1`r`n`tpublic:`r`n`t`t// Added by build shim: this build targets the desktop (non-VR) runtime.`r`n`t`t[[nodiscard]] static bool IsF4() { return true; }`r`n`t`t[[nodiscard]] static bool IsVR() { return false; }"
+            if ($m2 -eq $m) { Write-Error 'REL/Module.h 未能插入 IsF4/IsVR'; exit 1 }
+            Set-Content $mod -Value $m2 -NoNewline -Encoding utf8
+            Write-Host '  [4/5] patched REL/Module.h (IsF4/IsVR)'
+          } else {
+            Write-Host '  [4/5] REL/Module.h 已有 IsF4/IsVR，跳过'
+          }
+
+          # --- 5) NOMINMAX（修 ScopeCamera.h 的 C2589 min/max 宏冲突）---
+          $pch = 'src/True-Through-Scope/src/PCH.h'
+          $p = Get-Content $pch -Raw
+          if ($p -notmatch 'NOMINMAX') {
+            Set-Content $pch -Value ("#define NOMINMAX`r`n" + $p) -NoNewline -Encoding utf8
+            Write-Host '  [5/5] patched PCH.h (NOMINMAX)'
+          } else {
+            Write-Host '  [5/5] PCH.h 已有 NOMINMAX，跳过'
+          }
+
+          Write-Host '--- 确认五处 patch ---'
           Select-String -Path $hv  -Pattern 'hkVector4f GetNormalized'      | ForEach-Object { '  ' + $_.Line.Trim() }
           Select-String -Path $api -Pattern 'GetPluginVersion\(\).string'  | ForEach-Object { '  ' + $_.Line.Trim() }
           Select-String -Path $lg  -Pattern 'UTF16_TO_UTF8'                | ForEach-Object { '  ' + $_.Line.Trim() }
+          Select-String -Path $mod -Pattern 'static bool IsF4'             | ForEach-Object { '  ' + $_.Line.Trim() }
+          Select-String -Path $pch -Pattern 'NOMINMAX'                     | ForEach-Object { '  ' + $_.Line.Trim() }
 
       - name: Setup vcpkg (use runner-preinstalled copy)
         shell: pwsh
