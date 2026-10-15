@@ -84,11 +84,7 @@ jobs:
             Write-Host '  [4/6] REL/Module.h 已有 IsF4/IsVR，跳过'
           }
 
-          # --- 5) NOMINMAX + 6) 补缺失类型的前置声明 ---
-          #      ScopeCamera.h 用了 std::min/std::max，Windows.h 的 min/max 宏
-          #      会把它们展开掉（C2589），最前面定义 NOMINMAX 解决。
-          #      另外 powerof3/CommonLibF4 没有下列类，但 TTS 只把它们当作
-          #      指针 / Relocation<T**> 模板参数，前置声明即可，无布局风险。
+          # --- 5) NOMINMAX + 6) 补缺失类型（含推导的 BSLight）---
           $pch = 'src/True-Through-Scope/src/PCH.h'
           $p = Get-Content $pch -Raw
           if ($p -notmatch 'NOMINMAX') {
@@ -98,17 +94,42 @@ jobs:
             Write-Host '  [5/6] PCH.h 已有 NOMINMAX，跳过'
           }
           if ($p -notmatch 'BSGeometryListCullingProcess') {
-            $fwd = "`r`n// --- build shim: forward decls for types absent from powerof3/CommonLibF4 ---`r`n"
+            $fwd = "`r`n// --- build shim: types absent from powerof3/CommonLibF4 ---`r`n"
+            $fwd += "// Forward declarations first (TTS only uses these as pointers).`r`n"
             $fwd += "namespace RE`r`n{`r`n"
             $fwd += "`tclass BSEffectShaderProperty;`r`n"
             $fwd += "`tclass BSGeometryListCullingProcess;`r`n"
+            $fwd += "`tclass BSCullingProcess;`r`n"
             $fwd += "`tnamespace BSGraphics`r`n`t{`r`n"
             $fwd += "`t`tclass DynamicTriShape;`r`n"
             $fwd += "`t`tclass DynamicTriShapeDrawData;`r`n"
             $fwd += "`t}`r`n"
             $fwd += "}`r`n"
+            $fwd += "`r`n// BSLight: no public CommonLibF4 revision defines it (powerof3 and libxse`r`n"
+            $fwd += "// both only forward-declare it), yet TTS needs`r`n"
+            $fwd += "//   (a) NiPointer<BSLight> to be destructible, and`r`n"
+            $fwd += "//   (b) seven members, used by LightBackupSystem to save/restore indoor lights.`r`n"
+            $fwd += "//`r`n"
+            $fwd += "// !! INFERRED LAYOUT -- NOT BINARY-VERIFIED !!`r`n"
+            $fwd += "// Member order follows the order TTS touches them. If the offsets are wrong the`r`n"
+            $fwd += "// consequence is inaccurate light backup/restore (a wrong POD value is read and`r`n"
+            $fwd += "// written back), NOT a crash: the base chain (NiAVObject -> NiObject ->`r`n"
+            $fwd += "// NiRefObject) supplies the virtual destructor, so NiPointer teardown stays valid.`r`n"
+            $fwd += "namespace RE`r`n{`r`n"
+            $fwd += "`tclass BSLight : public NiAVObject`r`n"
+            $fwd += "`t{`r`n"
+            $fwd += "`tpublic:`r`n"
+            $fwd += "`t`tstd::uint16_t       usFrustumCull;    // inferred`r`n"
+            $fwd += "`t`tbool                bOccluded;        // inferred`r`n"
+            $fwd += "`t`tbool                bTemporary;       // inferred`r`n"
+            $fwd += "`t`tbool                bDynamicLight;    // inferred`r`n"
+            $fwd += "`t`tfloat               fLODDimmer;       // inferred`r`n"
+            $fwd += "`t`tNiPointer<NiCamera> spCamera;         // inferred`r`n"
+            $fwd += "`t`tBSCullingProcess*   pCullingProcess;  // inferred`r`n"
+            $fwd += "`t};`r`n"
+            $fwd += "}`r`n"
             $p = $p + $fwd
-            Write-Host '  [6/6] PCH.h += forward declarations'
+            Write-Host '  [6/6] PCH.h += forward decls + inferred BSLight'
           } else {
             Write-Host '  [6/6] PCH.h 已有前置声明，跳过'
           }
