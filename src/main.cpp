@@ -387,9 +387,7 @@ F4SE_EXPORT bool F4SEAPI F4SEPlugin_Load(const F4SE::LoadInterface* a_f4se)
 		TTS_TRACE("EXC-TRACE: F4SE::Init returned normally");
 	} __except (EXCEPTION_EXECUTE_HANDLER) {
 		char _ebuf[256] = { 0 };
-		wsprintfA(_ebuf, "EXC-TRACE: SEH code=0x%08lX addr=0x%p",
-		          (unsigned long)GetExceptionCode(),
-		          wsprintfA(_ebuf, "EXC-TRACE: SEH caught, code=0x%08lX", (unsigned long)GetExceptionCode());
+		wsprintfA(_ebuf, "EXC-TRACE: SEH caught, code=0x%08lX", (unsigned long)GetExceptionCode());
 		TTS_TraceWrite(_ebuf);
 		return false;
 	}
