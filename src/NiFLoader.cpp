@@ -1,6 +1,43 @@
 #include "NiFLoader.h"
 
+#include <RE/Bethesda/BSModelDB.h>   // BSModelDB::Demand -- the only working model loader we have
+
 using namespace RE;
+
+namespace
+{
+	// Load a NIF through the game's own model database.
+	//
+	// WHY THIS REPLACES BSStream:
+	//   NIFLoader used to do `BSStream::Create()` + `stream->Load(path)`. Both are
+	//   engine functions that live in Fallout4.exe and are NOT exported by
+	//   CommonLibF4.lib (powerof3 compiles no NiStream.cpp), so the build shim in
+	//   ci/PCH.append.h had to fake them -- with `Load()` simply returning false.
+	//   Consequence: NIFLoader::LoadNIF ALWAYS returned nullptr, the scope model
+	//   never attached, and the in-game settings panel showed exactly
+	//       "无 TTSNode"  and  "状态: 未加载"
+	//   while aiming produced no visible effect at all.
+	//
+	//   BSModelDB::Demand(const char*, NiPointer<NiNode>*, const ArgsType&) is the
+	//   game's supported "load this model by path" entry point, and both of its
+	//   REL::IDs (1066398 / 1225688) resolve fine against the 1.10.163 address
+	//   library -- master and dev-1.10.163 even agree on the values.
+	//
+	// CAVEAT: Demand hands back a handle into the shared model cache, so callers
+	// must not mutate the returned node's transform/properties in place. The
+	// attach path below is the one place that could, and it is only reached for
+	// the optional custom-scope-model feature.
+	RE::NiNode* LoadModelViaModelDB(const char* a_path)
+	{
+		RE::NiPointer<RE::NiNode> model;
+		RE::BSModelDB::DBTraits::ArgsType args{};
+		args.prepareAfterLoad = 1;
+		args.loadTextures = 1;
+		args.performProcess = 1;
+		(void)RE::BSModelDB::Demand(a_path, &model, args);
+		return model.get();
+	}
+}
 
 NIFLoader* NIFLoader::GetSingleton()
 {
@@ -10,52 +47,19 @@ NIFLoader* NIFLoader::GetSingleton()
 
 NiNode* NIFLoader::LoadNIF(const char* filePath)
 {
-	// Create a BSStream object to load the NIF file
-	BSStream* stream = BSStream::Create();
-
-	// Load the NIF file using BSStream::Load
-	if (!stream->Load(filePath)) {
+	NiNode* rootNode = LoadModelViaModelDB(filePath);
+	if (!rootNode) {
 		logger::error("Failed to load NIF file: {}", filePath);
 		return nullptr;
 	}
-
-	NiObject* rootObject = stream->topObjects[0].get();
-	if (!rootObject) {
-		logger::error("Failed to get root object from NIF file");
-		return nullptr;
-	}
-
-	// Cast the root object to NiNode
-	NiNode* rootNode = rootObject->IsNode();
-	if (!rootNode) {
-		logger::error("Root object is not a NiNode");
-		return nullptr;
-	}
-
 	return rootNode;
 }
 
 bool NIFLoader::LoadNIFAndAttach(const char* filePath)
 {
-	// Create a BSStream object to load the NIF file
-	BSStream* stream = BSStream::Create();
-
-	// Load the NIF file using BSStream::Load
-	if (!stream->Load(filePath)) {
-		logger::error("Failed to load NIF file: {}", filePath);
-		return false;
-	}
-
-	NiObject* rootObject = stream->topObjects[0].get();
-	if (!rootObject) {
-		logger::error("Failed to get root object from NIF file");
-		return false;
-	}
-
-	// Cast the root object to NiNode
-	NiNode* rootNode = rootObject->IsNode();
+	NiNode* rootNode = LoadModelViaModelDB(filePath);
 	if (!rootNode) {
-		logger::error("Root object is not a NiNode");
+		logger::error("Failed to load NIF file: {}", filePath);
 		return false;
 	}
 
