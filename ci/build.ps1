@@ -725,24 +725,32 @@ Write-Host '  [11/12] SecondPassRenderer.cpp downgraded (DrawWorld, SetCameraDat
     # src/RE/NetImmerse/NiMatrix3.cpp reaches the engine through
     # REL::ID(2269806..2269825). That entire ID family belongs to the newer address
     # library and NONE of it exists in the 1.10.163 database; dev-1.10.163 does not
-    # even ship this .cpp, so the replacement table cannot help. Function-local
-    # statics resolve lazily, so only the ones actually called matter -- and TTS
-    # calls exactly one, ToEulerAnglesXYZ, from 4 places in DebugPanel.cpp.
-    # Symptom when it fires: opening the Debug tab pops "id 2269806 not found!".
+    # even ship this .cpp, so the replacement table cannot help. The only value the
+    # dev branch does give is ToEulerAnglesXYZ == REL::ID(34114), which confirms the
+    # family sits in the small-ID range over there -- but nothing hands us the other
+    # eleven, and ID->offset ordering gives no adjacency to exploit.
     #
-    # It is a pure math helper (3x3 rotation matrix -> XYZ Euler angles), so just
-    # compute it. Replacement text lives in ci/NiMatrix3.ToEulerAnglesXYZ.inc.
+    # So all twelve get replaced at once: they are pure math (rotation matrix <->
+    # Euler angles), and To/From are written as exact inverses of each other so TTS
+    # stays self-consistent when it stores a rotation and reads it back.
+    # Observed symptoms before this: "id 2269806 not found!" on the Debug tab, and
+    # "id 2269813 not found!" while a save was loading (ScopeCamera.cpp:211 calls
+    # FromEulerAnglesXYZ on the scope camera).
+    # Replacement text lives in ci/NiMatrix3.EulerAngles.inc.
     $nm3 = Join-Path $clf4 "CommonLibF4/src/RE/NetImmerse/NiMatrix3.cpp"
-    $nm3inc = Join-Path $PSScriptRoot "NiMatrix3.ToEulerAnglesXYZ.inc"
+    $nm3inc = Join-Path $PSScriptRoot "NiMatrix3.EulerAngles.inc"
     if ((Test-Path $nm3) -and (Test-Path $nm3inc)) {
         $nm3text = [System.IO.File]::ReadAllText($nm3)
-        if (($nm3text.Contains("REL::ID(2269806)")) -and (-not $nm3text.Contains("[TTS CI] The engine implementation was reached"))) {
+        if (($nm3text.Contains("REL::ID(2269806)")) -and (-not $nm3text.Contains("[TTS CI] These 12 functions"))) {
             $implText = [System.IO.File]::ReadAllText($nm3inc).TrimEnd()
-            $rxNm3 = [regex]::new("(?s)bool\s+NiMatrix3::ToEulerAnglesXYZ\(float&\s+a_x,\s*float&\s+a_y,\s*float&\s+a_z\)\s+const\s*\{.*?\r?\n\t\}")
+            # Replace everything from the first engine-backed overload to (not including)
+            # the closing brace of the enclosing namespace.
+            $rxNm3 = [regex]::new("(?s)bool\s+NiMatrix3::ToEulerAnglesXYZ\(float&.*(?=\r?\n\}\s*\z)")
+            if (-not $rxNm3.IsMatch($nm3text)) { throw "NiMatrix3: Euler-angle block regex did not match" }
             $nm3new = $rxNm3.Replace($nm3text, $implText, 1)
-            if ($nm3new -eq $nm3text) { throw "NiMatrix3: ToEulerAnglesXYZ patch did not match" }
+            if ($nm3new -eq $nm3text) { throw "NiMatrix3: Euler-angle block patch did not match" }
             [System.IO.File]::WriteAllText($nm3, $nm3new, (New-Object System.Text.UTF8Encoding($false)))
-            Write-Host "  [11b] NiMatrix3.cpp ToEulerAnglesXYZ -> pure-math implementation" -ForegroundColor Green
+            Write-Host "  [11b] NiMatrix3.cpp Euler-angle family (12 fns) -> pure-math implementation" -ForegroundColor Green
         } else {
             Write-Host "  [11b] NiMatrix3.cpp already patched or ID absent -- skipping" -ForegroundColor Yellow
         }
