@@ -389,7 +389,7 @@ F4SE_EXPORT bool F4SEAPI F4SEPlugin_Load(const F4SE::LoadInterface* a_f4se)
 		char _ebuf[256] = { 0 };
 		wsprintfA(_ebuf, "EXC-TRACE: SEH code=0x%08lX addr=0x%p",
 		          (unsigned long)GetExceptionCode(),
-		          GetExceptionInformation() ? (void*)GetExceptionInformation()->ExceptionRecord->ExceptionAddress : (void*)0);
+		          wsprintfA(_ebuf, "EXC-TRACE: SEH caught, code=0x%08lX", (unsigned long)GetExceptionCode());
 		TTS_TraceWrite(_ebuf);
 		return false;
 	}
