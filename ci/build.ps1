@@ -49,90 +49,102 @@ Write-Host '--- PCH.h tail BEFORE patching ---'
 Get-Content $pchPath | Select-Object -Last 12 | ForEach-Object { '   ' + $_ }
 Write-Host ''
 
-# ================================================================ 0) fix CommonLibF4's engine address tables
-# CRITICAL, and it is a LOAD-TIME problem -- the compiler cannot see it.
+# ================================================================ 0) overlay CommonLibF4 include tree with dev-1.10.163
 #
-# The workflow checks out powerof3/CommonLibF4@master. master targets the LATEST
-# game version, so a large part of it is simply wrong for 1.10.163. Measuring
-# every REL::ID against the 1.10.163 Address Library:
+# THE CENTRAL PROBLEM (found at plugin LOAD time, after the DLL finally built):
 #
-#     master              11154 IDs,  9015 valid, 2139 MISSING   (80.8%)
-#     dev-1.10.163        12575 IDs, 12575 valid,    0 missing   (100.0%)
+#   The workflow checks out powerof3/CommonLibF4@master. master targets the
+#   LATEST game version, so much of it is simply wrong for 1.10.163. Measuring
+#   every REL::ID against the 1.10.163 Address Library:
 #
-# CommonLibF4 resolves REL::ID lazily, and `inline static` members initialise as
-# soon as their class is used, so one bad ID pops up at plugin load:
-#     CommonLibF4/src/REL/IDDB.cpp(127): id 2713225 not found!
-# (2713225 was master's ImageSpaceEffectTemporalAA::bDisable -- pulled in only
-#  because TTS reads ImageSpaceEffectTemporalAA::VTABLE.)
+#       master              11154 IDs,  9015 valid, 2139 MISSING   (80.8%)
+#       dev-1.10.163        12575 IDs, 12575 valid,    0 missing   (100.0%)
 #
-# We cannot simply switch to the dev-1.10.163 branch: it has 337 headers vs
-# master's 454 and does NOT define BSTriShape or BSGeometry, which TTS needs.
+#   A missing ID is fatal at LOAD time, not compile time. CommonLibF4 resolves
+#   REL::ID lazily, and /inline static/ members plus function-local /static/
+#   initialisers fire as soon as the enclosing class or function is ODR-used,
+#   so the DLL shows a MessageBox before any plugin code runs:
 #
-# So: keep master's TYPE DEFINITIONS (complete) and replace only its two engine
-# ADDRESS TABLES with the 1.10.163 ones. Those two files are pure ID lists:
+#       CommonLibF4/src/REL/IDDB.cpp(127): id 2713225 not found!
+#       game version: 1.10.163.0
 #
-#     RE/VTABLE_IDs.h   master 10366 IDs (1729 bad)  ->  dev 11909 IDs (0 bad)
-#     RE/RTTI_IDs.h     master 12281 entries (10742 bad) -> dev 11888 (0 bad)
+#   That one was:
+#       master  RE/Bethesda/ImageSpaceEffect.h:159  bDisable{ REL::ID(2713225) }
+#       dev     RE/Bethesda/ImageSpaceEffect.h:192  bDisable{ REL::ID(1500590) }
 #
-# and TTS itself references exactly ONE VTABLE::/RTTI:: name, which exists in
-# both tables -- so the blast radius here is tiny and well understood.
-function Get-GitFile([string]$repo, [string]$branch, [string]$relPath, [string]$dest) {
-    Push-Location $repo
+#   The number is hard-coded in the HEADER, not read from an ID table. That is
+#   why swapping VTABLE_IDs.h / RTTI_IDs.h alone was NOT enough: it fixes
+#   references that come from those tables, but does nothing for a literal
+#   constant inside a class body. The fix must bring in the real headers.
+#
+# WHY NOT SIMPLY CHECK OUT dev-1.10.163:
+#   It has 337 files vs master 454 and does NOT define BSTriShape or
+#   BSGeometry, which TTS needs.
+#
+# THE FIX -- overlay instead of switch:
+#   /git checkout <ref> -- <path>/ updates only the files present in <ref> and
+#   does NOT prune files that exist solely in the working tree. Overlaying dev:
+#
+#     in both        -> dev version   (correct 1.10.163 IDs)
+#     only in master -> kept as-is    (BSGeometry.h, BSTriShape.h, ...)
+#     only in dev    -> added
+#
+#   VTABLE_IDs.h and RTTI_IDs.h get replaced as a side effect, so the earlier
+#   hand-rolled table swap is no longer needed.
+#
+#   Two stale IDs do remain in master-only headers (RE/Bethesda/Sky.h has three
+#   function-local statics). TTS only includes that header and never calls into
+#   it, so those initialisers never run and the stale IDs are inert. Verified by
+#   grepping the whole TTS tree for Sky::.
+$clf4    = $commonlibf4
+$clf4Inc = Join-Path $clf4 "CommonLibF4/include"
+
+if ((Test-Path (Join-Path $clf4 ".git")) -and (Test-Path $clf4Inc)) {
+    $iseHdr = Join-Path $clf4Inc "RE/Bethesda/ImageSpaceEffect.h"
+
+    $idsBefore = @()
+    if (Test-Path $iseHdr) {
+        $idsBefore = (Select-String -Path $iseHdr -Pattern "REL::ID((d+))" -AllMatches).Matches |
+            ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique
+    }
+    Write-Host ("  ImageSpaceEffect.h IDs before: " + ($idsBefore -join ", "))
+
+    Push-Location $clf4
     try {
-        & git fetch --depth=1 origin $branch 2>&1 | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw "git fetch $branch failed" }
-        # `git show` writes to stdout; redirect via cmd to avoid PowerShell re-encoding
-        $out = & git show ("FETCH_HEAD:" + $relPath) 2>$null
-        if ($LASTEXITCODE -ne 0 -or -not $out) { throw "git show FETCH_HEAD:$relPath returned nothing" }
-        [System.IO.File]::WriteAllText($dest, ($out -join "`n") + "`n", (New-Object System.Text.UTF8Encoding($false)))
+        & git fetch --depth=1 origin dev-1.10.163 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "git fetch dev-1.10.163 failed" }
+        & git checkout --force FETCH_HEAD -- CommonLibF4/include 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "git checkout FETCH_HEAD -- CommonLibF4/include failed" }
+        $head = (& git rev-parse --short FETCH_HEAD 2>$null)
+        Write-Host ("  overlaid dev-1.10.163 include tree (FETCH_HEAD=" + $head + ")")
     } finally {
         Pop-Location
     }
-}
 
-$clf4       = $commonlibf4
-$clf4Inc    = Join-Path $clf4 'CommonLibF4/include'
-$tblVT      = Join-Path $clf4Inc 'RE/VTABLE_IDs.h'
-$tblRTTI    = Join-Path $clf4Inc 'RE/RTTI_IDs.h'
+    if (-not (Test-Path $iseHdr)) { throw "ImageSpaceEffect.h disappeared after the overlay" }
 
-if ((Test-Path (Join-Path $clf4 '.git')) -and (Test-Path $tblVT)) {
-    # VTABLE_IDs.h is a list of `REL::ID(nnn)` initialisers, so counting that
-    # token is a good size proxy for it.
-    #
-    # RTTI_IDs.h is NOT: it declares its entries in the other CommonLibF4 style
-    # (`inline constexpr RTTI::X = nnn;`), so counting 'REL::ID(' against it
-    # always yields 0 -- which made the old assertion (0 <= 0) throw even though
-    # the swap had actually succeeded. Use LINE COUNT for that file instead.
-    function Measure-Table([string]$path) {
-        if (-not (Test-Path $path)) { return @{ Ids = 0; Lines = 0 } }
-        $ids = (Select-String -Path $path -Pattern 'REL::ID\(' -AllMatches -ErrorAction SilentlyContinue).Matches.Count
-        $lines = (Get-Content -Path $path -ErrorAction SilentlyContinue | Measure-Object -Line).Lines
-        return @{ Ids = $ids; Lines = $lines }
+    $idsAfter = (Select-String -Path $iseHdr -Pattern "REL::ID((d+))" -AllMatches).Matches |
+        ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique
+    Write-Host ("  ImageSpaceEffect.h IDs after : " + ($idsAfter -join ", "))
+
+    if ($idsAfter -contains "2713225") {
+        throw "ImageSpaceEffect.h still carries the stale master ID 2713225 -- overlay did not take effect"
+    }
+    if (-not ($idsAfter -contains "1500590")) {
+        throw "ImageSpaceEffect.h is missing the 1.10.163 ID 1500590 -- unexpected content after overlay"
     }
 
-    $bVT = Measure-Table $tblVT
-    $bRT = Measure-Table $tblRTTI
-    Write-Host "  before: VTABLE ids=$($bVT.Ids) lines=$($bVT.Lines) | RTTI ids=$($bRT.Ids) lines=$($bRT.Lines)"
-
-    Get-GitFile $clf4 'dev-1.10.163' 'CommonLibF4/include/RE/VTABLE_IDs.h' $tblVT
-    Get-GitFile $clf4 'dev-1.10.163' 'CommonLibF4/include/RE/RTTI_IDs.h'   $tblRTTI
-
-    $aVT = Measure-Table $tblVT
-    $aRT = Measure-Table $tblRTTI
-    Write-Host "  after : VTABLE ids=$($aVT.Ids) lines=$($aVT.Lines) | RTTI ids=$($aRT.Ids) lines=$($aRT.Lines)"
-
-    # Each table is checked independently: the file must have been replaced with
-    # a non-empty one of a different shape than before.
-    if ($aVT.Lines -le 0 -or $aVT.Ids -le 0) { throw 'VTABLE_IDs.h looks empty after the swap' }
-    if ($aRT.Lines -le 0) { throw 'RTTI_IDs.h looks empty after the swap' }
-    if ($aVT.Lines -eq $bVT.Lines -and $aVT.Ids -eq $bVT.Ids) { throw 'VTABLE_IDs.h was not actually replaced' }
-    if ($aRT.Lines -eq $bRT.Lines) { throw 'RTTI_IDs.h was not actually replaced' }
-    Write-Host '  address-table swap verified' -ForegroundColor Green
+    # Types that exist only on master must survive the overlay.
+    foreach ($must in @("RE/Bethesda/BSGeometry.h")) {
+        if (-not (Test-Path (Join-Path $clf4Inc $must))) {
+            throw ("overlay pruned a master-only header we need: " + $must)
+        }
+    }
+    Write-Host "  include overlay verified (dev IDs in, master-only types kept)" -ForegroundColor Green
 } else {
-    Write-Host '  (not a git checkout or tables missing -- skipping address-table swap)' -ForegroundColor Yellow
+    Write-Host "  (not a git checkout or include dir missing -- skipping include overlay)" -ForegroundColor Yellow
 }
-Write-Host ''
-
+Write-Host ""
 # ================================================================ 1) hkVector4.h
 $hv = Join-Path $commonlibf4 'CommonLibF4/include/RE/Havok/hkVector4.h'
 $t = Get-Content $hv -Raw
