@@ -302,32 +302,73 @@ namespace ThroughScope {
 	
 	UINT D3DHooks::GetDrawIndexedIndex(ID3D11DeviceContext* context)
 	{
-		// 创建测试资源
+		// This hunts for the DrawIndexed slot of the D3D11 device-context vtable by
+		// matching a 5-byte opcode pattern. Two things are wrong with doing that
+		// naively, and both are worth guarding:
+		//
+		//  1. "mov rax,[rcx]; call [rax+..]" is the standard shape of a COM method
+		//     that dispatches through its own vtable, so the pattern is NOT specific
+		//     to DrawIndexed. Matching the wrong slot would install the hook on an
+		//     unrelated method, and then every DrawIndexed call would land in the
+		//     wrong function with mismatched arguments -- the kind of corruption
+		//     that shows up later as a crash somewhere else entirely.
+		//  2. CreateBuffer's result was never checked, so a failure would hand a
+		//     null buffer to IASetIndexBuffer.
+		//
+		// The D3D11 spec fixes DrawIndexed at vtable index 12, so treat 12 as the
+		// expectation and only accept a scan hit that confirms it. Report the
+		// outcome through the trace channel, because "which index did it actually
+		// pick" is exactly what decides whether the hook is trustworthy.
+		if (!context || !m_Device) {
+			TTS_TRACE("DI-IDX: context or device is null -> using index 12");
+			return 12;
+		}
+
 		D3D11_BUFFER_DESC desc = { 0 };
 		desc.ByteWidth = 1024;
 		desc.BindFlags = D3D11_BIND_INDEX_BUFFER;
 
 		ID3D11Buffer* testBuffer = nullptr;
-		m_Device->CreateBuffer(&desc, nullptr, &testBuffer);
+		const HRESULT hr = m_Device->CreateBuffer(&desc, nullptr, &testBuffer);
+		if (FAILED(hr) || !testBuffer) {
+			char b[128];
+			sprintf_s(b, "DI-IDX: CreateBuffer failed (hr=0x%08X) -> using index 12", (unsigned)hr);
+			TTS_TRACE(b);
+			return 12;
+		}
 
-		// 设置测试状态
 		context->IASetIndexBuffer(testBuffer, DXGI_FORMAT_R16_UINT, 0);
 
-		// 特征码扫描
-		const BYTE drawCallPattern[] = { 0x48, 0x8B, 0x01, 0xFF, 0x90 };  // mov rax,[rcx]; call [rax+...]
-
+		const BYTE drawCallPattern[] = { 0x48, 0x8B, 0x01, 0xFF, 0x90 };
+		UINT found = UINT32_MAX;
+		UINT hits = 0;
 		for (UINT i = 0; i < 100; i++) {
 			void* func = reinterpret_cast<void**>(*reinterpret_cast<void***>(context))[i];
-
-			if (memcmp(func, drawCallPattern, sizeof(drawCallPattern)) == 0) {
-				logger::info("Found DrawIndexed at index {}", i);
-				testBuffer->Release();
-				return i;
+			if (func && memcmp(func, drawCallPattern, sizeof(drawCallPattern)) == 0) {
+				if (hits == 0) { found = i; }
+				++hits;
 			}
 		}
 
+		{
+			char b[200];
+			sprintf_s(b, "DI-IDX: pattern hits=%u firstHit=%d -> chosen index %u (spec expects 12)",
+			          (unsigned)hits, (found == UINT32_MAX ? -1 : (int)found),
+			          (hits > 0 && found == 12) ? 12u : 12u);
+			TTS_TRACE(b);
+		}
+
 		testBuffer->Release();
-		return 12;  // 默认值
+
+		// Only trust the scan when it agrees with the spec; otherwise the pattern
+		// matched something that is not DrawIndexed and hooking it would corrupt
+		// every draw call.
+		if (hits > 0 && found == 12) {
+			logger::info("Found DrawIndexed at index 12 (confirmed by scan)");
+			return 12;
+		}
+		logger::info("DrawIndexed scan inconclusive (hits={}, first={}) - using spec index 12", hits, (int)found);
+		return 12;
 	}
 
 	bool isRenderDocDll = false;
