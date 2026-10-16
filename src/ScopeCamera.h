@@ -59,6 +59,16 @@ namespace ThroughScope
 		static RE::NiNode* AcquireScopeNode();
 		static void ReleaseScopeNode(RE::NiNode* a_node);
 		static std::mutex& ScopeNodeMutex();
+
+		// Atomically replace s_CurrentScopeNode: drop the reference held by the old
+		// node and take over the caller's reference to the new one.
+		//
+		// The UI panels (CameraAdjustmentPanel / ModelSwitcherPanel) used to assign
+		// to the static directly when the user switched scope models. That both
+		// leaked the previous node (nothing released it) and raced the render
+		// thread, in exactly the way that made weapon swaps crash. Route those
+		// assignments through here instead.
+		static void PublishScopeNode(RE::NiNode* a_node);
 		static void RestoreZoomDataForCurrentWeapon();  // 恢复ZoomData的方法
         // Get target FOV
         static float GetTargetFOV() { return s_TargetFOV; }
