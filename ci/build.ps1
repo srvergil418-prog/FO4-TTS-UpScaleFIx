@@ -132,69 +132,47 @@ if ((Test-Path (Join-Path $clf4 ".git")) -and (Test-Path $clf4Inc)) {
 
     Push-Location $clf4
     try {
-        & git fetch --depth=1 origin dev-1.10.163 2>&1 | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw "git fetch dev-1.10.163 failed" }
+        & git fetch --depth=1 origin master 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "git fetch master failed" }
         & git checkout --force FETCH_HEAD -- CommonLibF4 2>&1 | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "git checkout FETCH_HEAD -- CommonLibF4 failed" }
         $head = (& git rev-parse --short FETCH_HEAD 2>$null)
-        Write-Host ("  overlaid dev-1.10.163 include tree (FETCH_HEAD=" + $head + ")")
+        Write-Host ("  overlaid powerof3/master include tree (FETCH_HEAD=" + $head + ")")
     } finally {
         Pop-Location
     }
 
     # ------------------------------------------------------------------
-    # Drop the master-only headers that dev-1.10.163 CONSOLIDATED into a
-    # single file. Overlaying dev ADDS its split headers while master's
-    # combined one stays behind, so both end up defining the same classes:
+    # Targeted REL::ID repair for master.
     #
-    #   master  RE/NetImmerse/NiPoint.h        defines NiPoint2/3/4
-    #   dev     RE/NetImmerse/NiPoint2.h +
-    #           RE/NetImmerse/NiPoint3.h      same classes -> C2011
+    # powerof3/master carries IDs from a NEWER runtime; against the 1.10.163
+    # address library only some of them resolve. Almost all of the stale ones
+    # sit in inline static / function-local statics that are never ODR-used, so
+    # they never initialise and are harmless. The ones in ImageSpaceEffect.h
+    # ARE reachable from TTS, and they were the cause of the plugin-load
+    # MessageBox "IDDB.cpp(127): id 2713225 not found!".
     #
-    #   REL/ was likewise folded into REL/Relocation.h on dev
-    #   (REL/Segment.h vs Relocation.h both defining REL::Segment).
-    #
-    # Verified safe: grepping the whole TTS tree shows it only includes
-    # RE/NetImmerse/NiCamera.hpp and NiFrustum.hpp, both of which are its own
-    # forwarding headers -- it never includes REL/*.h or NiPoint*.h directly.
+    # Replacement values come from powerof3/dev-1.10.163, whose ID table is
+    # 100%% valid for 1.10.163. Only these four differ; 1065542 and 775377 are
+    # already correct on master.
     # ------------------------------------------------------------------
-    $consolidated = @(
-        "include/RE/NetImmerse/NiPoint.h",
-        "include/REL/IAT.h",
-        "include/REL/ID.h",
-        "include/REL/IDDB.h",
-        "include/REL/Module.h",
-        "include/REL/Offset.h",
-        "include/REL/Offset2ID.h",
-        "include/REL/REL.h",
-        "include/REL/Segment.h",
-        "include/REL/Version.h"
-    )
-    #
-    # PATH BUG FIX: $clf4 is the git repo ROOT (.../src/CommonLibF4) but the
-    # headers live one level deeper, under CommonLibF4/. Joining $clf4 with
-    # "include/..." therefore pointed at a nonexistent path and this loop
-    # always reported "dropped 0" -- which is exactly why NiPoint.h was still
-    # conflicting in CI. The ImageSpaceEffect.h check above works because it
-    # spells the path out in full.
-    #
-    $dropped = 0
-    foreach ($rel in $consolidated) {
-        $full = Join-Path $clf4 ("CommonLibF4/" + $rel)
-        if (Test-Path $full) {
-            Remove-Item $full -Force -ErrorAction SilentlyContinue
-            $dropped++
-        } else {
-            Write-Host ("    (absent, nothing to drop: " + $rel) -ForegroundColor DarkGray
-        }
+    $iseFixes = @{
+        "2713225" = "372489"
+        "2713237" = "1523708"
+        "4784697" = "1500590"
     }
-    Write-Host ("  dropped " + $dropped + " master-only header(s) consolidated into dev files")
-    if ($dropped -eq 0) {
-        throw "consolidated-header cleanup removed nothing -- the path is wrong; NiPoint.h will still collide with NiPoint2/3.h"
+    $iseBefore = Get-Content $iseHdr -Raw
+    $iseAfter = $iseBefore
+    foreach ($bad in $iseFixes.Keys) {
+        $iseAfter = $iseAfter.Replace("REL::ID(" + $bad + ")", "REL::ID(" + $iseFixes[$bad] + ")")
+    }
+    if ($iseAfter -ne $iseBefore) {
+        Set-Content $iseHdr -Value $iseAfter -NoNewline -Encoding utf8
+        Write-Host "  patched ImageSpaceEffect.h REL::IDs (master -> 1.10.163 values)"
+    } else {
+        Write-Host "  ImageSpaceEffect.h: no stale IDs found (already patched?)" -ForegroundColor Yellow
     }
 
-    # A few files existed only so the old split headers could exist; if the
-    # matching .cpp is gone the CMake list already excludes it, so nothing to do.
 
     if (-not (Test-Path $iseHdr)) { throw "ImageSpaceEffect.h disappeared after the overlay" }
 
@@ -202,7 +180,7 @@ if ((Test-Path (Join-Path $clf4 ".git")) -and (Test-Path $clf4Inc)) {
     Write-Host ("  ImageSpaceEffect.h IDs after : " + $(if ($idsAfter.Count) { $idsAfter -join ", " } else { "(none)" }))
 
     if ($idsAfter -contains "2713225") {
-        throw "ImageSpaceEffect.h still carries the stale master ID 2713225 -- overlay did not take effect"
+        throw "ImageSpaceEffect.h still carries the stale master ID 2713225 -- the repair did not apply"
     }
     if (-not ($idsAfter -contains "1500590")) {
         throw "ImageSpaceEffect.h is missing the 1.10.163 ID 1500590 -- unexpected content after overlay"
