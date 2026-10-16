@@ -1177,6 +1177,38 @@ namespace ThroughScope {
 			D3D11_VIEWPORT oldViewports[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
 			pContext->RSGetViewports(&numViewports, oldViewports);
 
+			// RT4's real dimensions decide which viewport the scope quad needs.
+			// The quad's vertices come from the game, which drew them against the
+			// internal render resolution (1920x1080 in this install) while the swap
+			// chain presents at 3840x2160. Drawing those vertices through a
+			// 3840x2160 viewport scales the picture 2x, which is the "large area in
+			// a corner" the user sees. Knowing RT4's size tells us which of the two
+			// is right -- do not guess it.
+			{
+				Microsoft::WRL::ComPtr<ID3D11Resource> rt4Res;
+				Microsoft::WRL::ComPtr<ID3D11Texture2D> rt4Tex;
+				UINT rt4W = 0, rt4H = 0;
+				if (rt4RTV) {
+					rt4RTV->GetResource(rt4Res.GetAddressOf());
+					if (rt4Res && SUCCEEDED(rt4Res.As(&rt4Tex))) {
+						D3D11_TEXTURE2D_DESC rt4Desc{};
+						rt4Tex->GetDesc(&rt4Desc);
+						rt4W = rt4Desc.Width;
+						rt4H = rt4Desc.Height;
+					}
+				}
+				char rtBuf[300];
+				auto rtState = RE::BSGraphics::State::GetSingleton();
+				sprintf_s(rtBuf,
+				          "ST-TRACE: RT4 WH=(%ux%u) | capturedScopeVp WH=(%.1fx%.1f) hasVp=%d | curVp WH=(%.1fx%.1f) count=%u | backBuffer=%ux%u",
+				          rt4W, rt4H,
+				          s_ScopeQuadOriginalViewport.Width, s_ScopeQuadOriginalViewport.Height, (int)s_HasScopeQuadViewport,
+				          oldViewports[0].Width, oldViewports[0].Height, (unsigned)numViewports,
+				          rtState ? (unsigned)rtState->backBufferWidth : 0u,
+				          rtState ? (unsigned)rtState->backBufferHeight : 0u);
+				TTS_TRACE(rtBuf);
+			}
+
 			// 创建写入 stencil 和深度的 DSS
 			// 深度测试总是通过，这样 ScopeQuad 不会被场景深度遮挡
 			// 但我们仍然写入深度，以便后续效果（如景深、SSAO）可以正确处理瞄具区域
@@ -1208,7 +1240,7 @@ namespace ThroughScope {
 					// lens, the viewport here is the first thing to check.
 					char stBuf[260];
 					sprintf_s(stBuf,
-					          "ST-TRACE: draw with vp TL=(%.1f,%.1f) WH=(%.1fx%.1f) hasVp=%d | oldVp TL=(%.1f,%.1f) WH=(%.1fx%.1f) count=%u",
+					          "ST2-TRACE: draw with vp TL=(%.1f,%.1f) WH=(%.1fx%.1f) hasVp=%d | oldVp TL=(%.1f,%.1f) WH=(%.1fx%.1f) count=%u",
 					          s_ScopeQuadOriginalViewport.TopLeftX, s_ScopeQuadOriginalViewport.TopLeftY,
 					          s_ScopeQuadOriginalViewport.Width, s_ScopeQuadOriginalViewport.Height,
 					          (int)s_HasScopeQuadViewport,
