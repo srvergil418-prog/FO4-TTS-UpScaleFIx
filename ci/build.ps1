@@ -216,8 +216,7 @@ Write-Host '  [8/9] SettingsPanel.cpp (ImGuiMod_*)'
 # command is generated at all -- no need to touch the macro body.
 $cml = Join-Path $tts 'CMakeLists.txt'
 $cRaw = Get-Content $cml -Raw
-# Normalise line endings to LF first: the CI checkout is CRLF while the here-string
-# below is LF, so an un-normalised multi-line match silently fails.
+# Normalise line endings to LF first: the CI checkout is CRLF while local is LF.
 $c = $cRaw -replace "`r`n", "`n"
 $c0 = $c
 
@@ -225,28 +224,30 @@ $c = $c.Replace(
     'option(COPY_BUILD "Copy the build output to the Fallout 4 directory." ON)',
     'option(COPY_BUILD "Copy the build output to the Fallout 4 directory." OFF)  # build shim: author-local paths, default OFF')
 
-$oldPaths = @'
-set(HLSL_OUTPUT_PATHS
-    "G:/Games/FO4_SO/mods/TTS True Through Scope/Shaders/XiFeiLi"
-    "G:/Games/Fallout 4 ori/Fallout 4/Mo2/mods/TTS/Shaders/XiFeiLi"
-	"I:/Games/Fallout 4 Pack/FO4SO_1.5/mods/TTS/Shaders/XiFeiLi"
-)
-'@
-$newPaths = @'
-# build shim: only the compile-output path is kept. The other two were absolute
-# paths on the author's machine; with a single entry PATH_COUNT == 1, so the
-# POST_BUILD copy loop below is never generated.
-set(HLSL_OUTPUT_PATHS
-    "${CMAKE_CURRENT_BINARY_DIR}/hlsl"
-)
-'@
-
-$c = $c.Replace($oldPaths, $newPaths)
-if ($c -eq $c0) {
-    throw 'CMakeLists.txt: neither COPY_BUILD nor HLSL_OUTPUT_PATHS pattern matched'
+# Remove the two author-local entries line by line instead of matching the whole
+# multi-line block. The original block mixes 4-space and TAB indentation, and the
+# TAB does not survive every checkout/editor round trip, which made the block
+# match fail silently. Matching per line on the quoted path prefix is immune to
+# whatever whitespace precedes it.
+$before = $c
+$c = $c -replace '(?m)^[ \t]*"G:/Games/Fallout 4 ori/[^"]*"[ \t]*\n', ''
+$c = $c -replace '(?m)^[ \t]*"I:/Games/Fallout 4 Pack/[^"]*"[ \t]*\n', ''
+if ($c -eq $before) {
+    throw 'CMakeLists.txt: no author-local HLSL output path line was removed'
 }
-if ($c -match 'Fallout 4 ori') {
-    throw 'CMakeLists.txt: author-local path survived the patch'
+
+# Replace the (now single-entry) first path with a build-local directory, so the
+# shader compile output still lands somewhere writable on the runner.
+# NOTE: the replacement must be a double-quoted string -- inside single quotes
+# PowerShell treats `n as two literal characters rather than a newline.
+$hlslReplacement = '    "${CMAKE_CURRENT_BINARY_DIR}/hlsl"' + "`n"
+$c = $c -replace '(?m)^[ \t]*"G:/Games/FO4_SO/[^"]*"[ \t]*\n', $hlslReplacement
+
+if ($c -match 'Fallout 4 ori' -or $c -match 'FO4SO_1\.5' -or $c -match 'G:/Games' -or $c -match 'I:/Games') {
+    throw 'CMakeLists.txt: an author-local path survived the patch'
+}
+if ($c -notmatch 'CMAKE_CURRENT_BINARY_DIR}/hlsl') {
+    throw 'CMakeLists.txt: replacement HLSL output path is missing'
 }
 Set-Content $cml -Value $c -NoNewline -Encoding utf8
 Write-Host '  [8c/9] CMakeLists.txt HLSL output paths -> single build-local dir'
