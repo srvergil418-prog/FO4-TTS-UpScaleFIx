@@ -256,6 +256,59 @@ if ((Test-Path (Join-Path $clf4 ".git")) -and (Test-Path $clf4Inc)) {
         }
     }
     Write-Host ("  id repair: " + $totalFixed + " stale REL::ID replaced with 1.10.163 values")
+
+    # ================================================================
+    # Disable REL::Relocation members whose ID is absent from the 1.10.163
+    # address library and has no 1.10.163 counterpart to be mapped to.
+    #
+    # Why this is mandatory rather than cosmetic:
+    #   inline static REL::Relocation<T> x{ REL::ID(N) };
+    # has STATIC STORAGE DURATION, so its dynamic initialisation is run by the
+    # CRT during DLL load -- whether or not TTS ever mentions x. If N is
+    # unknown, IDDB calls stl::report_and_fail(), which pops a MessageBox and
+    # terminates the process BEFORE DllMain. That is exactly the failure
+    # observed: tts-trace.log stayed completely empty (not even
+    # "DllMain PROCESS_ATTACH") while Fallout4.exe sat there with a dialog
+    # whose title was "TrueThroughScope.dll" and whose text named the missing
+    # id. So this is not laziness about dead code -- it is the blocker itself.
+    #
+    # Counter-example worth remembering: RTTI_IDs.h and VTABLE_IDs.h use
+    #   inline constexpr REL::ID X{ N };
+    # which is a compile-time constant and is NEVER resolved at load time.
+    # Their leftovers are inert; only REL::Relocation matters here.
+    #
+    # The list comes from tools/gen-dead-ids.mjs, run offline because the
+    # address library lives on the developer machine and not on the runner.
+    #
+    # If TTS genuinely needs one of these members, the build now FAILS at the
+    # point of use -- which is the signal we want: that member then has to be
+    # given a real 1.10.163 ID sourced from the author PDB, not guessed.
+    $deadJson = Join-Path $PSScriptRoot "dead-ids.json"
+    if (-not (Test-Path $deadJson)) { throw "ci/dead-ids.json is missing -- run tools/gen-dead-ids.mjs to regenerate it" }
+    $deadIds = @{}
+    $deadObj = [System.IO.File]::ReadAllText($deadJson) | ConvertFrom-Json
+    foreach ($prop in $deadObj.PSObject.Properties) { $deadIds[$prop.Name] = $true }
+    Write-Host ("  dead id list: " + $deadIds.Count + " ids absent from the 1.10.163 address library")
+
+    $script:deadIds = $deadIds
+    $script:deadDisabled = 0
+    $deadEval = [System.Text.RegularExpressions.MatchEvaluator]{
+        param($m)
+        $id = $m.Groups[2].Value
+        if ($script:deadIds.ContainsKey($id)) {
+            $script:deadDisabled++
+            return ("// [TTS CI] disabled below: ID " + $id + " is absent from the 1.10.163 address library and has no counterpart there.`r`n// ")
+        }
+        return $m.Value
+    }
+    $rxDead = [regex]::new('(?m)^[ \t]*((?:inline[ \t]+static[ \t]+)?REL::Relocation\s*<[^\r\n]*?REL::ID\(\s*(\d+)\s*\)[^\r\n]*)')
+    foreach ($f in $allHeaders) {
+        $before = [System.IO.File]::ReadAllText($f.FullName)
+        if ($before -notmatch "REL::Relocation") { continue }
+        $after = $rxDead.Replace($before, $deadEval)
+        if ($after -ne $before) { [System.IO.File]::WriteAllText($f.FullName, $after) }
+    }
+    Write-Host ("  disabled " + $script:deadDisabled + " REL::Relocation members whose IDs do not exist in 1.10.163") -ForegroundColor Yellow
     if (-not (Test-Path $iseHdr)) { throw "ImageSpaceEffect.h disappeared after the overlay" }
 
     $idsAfter = Get-RelIds $iseHdr
