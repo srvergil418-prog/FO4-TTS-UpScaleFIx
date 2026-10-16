@@ -424,7 +424,7 @@ F4SE_EXPORT bool F4SEAPI F4SEPlugin_Load(const F4SE::LoadInterface* a_f4se)
 				(unsigned long)_er->ExceptionCode,
 				static_cast<const void*>(_er->ExceptionAddress),
 				(unsigned long)(_er->NumberParameters > 0 ? _er->ExceptionInformation[0] : 0),
-				static_cast<const void*>(_er->NumberParameters > 1 ? _er->ExceptionInformation[1] : 0));
+				reinterpret_cast<void*>(_er->NumberParameters > 1 ? _er->ExceptionInformation[1] : 0));
 		} else {
 			wsprintfA(_ebuf, "EXC-TRACE: SEH caught, code=0x%08lX (no exception record)", (unsigned long)GetExceptionCode());
 		}
