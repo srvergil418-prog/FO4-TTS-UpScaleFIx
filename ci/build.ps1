@@ -96,19 +96,38 @@ $tblVT      = Join-Path $clf4Inc 'RE/VTABLE_IDs.h'
 $tblRTTI    = Join-Path $clf4Inc 'RE/RTTI_IDs.h'
 
 if ((Test-Path (Join-Path $clf4 '.git')) -and (Test-Path $tblVT)) {
-    $beforeVT   = (Select-String -Path $tblVT   -Pattern 'REL::ID\(' -AllMatches).Matches.Count
-    $beforeRTTI = (Select-String -Path $tblRTTI -Pattern 'REL::ID\(' -AllMatches).Matches.Count
-    Write-Host "  address-table entries before: VTABLE=$beforeVT RTTI=$beforeRTTI"
+    # VTABLE_IDs.h is a list of `REL::ID(nnn)` initialisers, so counting that
+    # token is a good size proxy for it.
+    #
+    # RTTI_IDs.h is NOT: it declares its entries in the other CommonLibF4 style
+    # (`inline constexpr RTTI::X = nnn;`), so counting 'REL::ID(' against it
+    # always yields 0 -- which made the old assertion (0 <= 0) throw even though
+    # the swap had actually succeeded. Use LINE COUNT for that file instead.
+    function Measure-Table([string]$path) {
+        if (-not (Test-Path $path)) { return @{ Ids = 0; Lines = 0 } }
+        $ids = (Select-String -Path $path -Pattern 'REL::ID\(' -AllMatches -ErrorAction SilentlyContinue).Matches.Count
+        $lines = (Get-Content -Path $path -ErrorAction SilentlyContinue | Measure-Object -Line).Lines
+        return @{ Ids = $ids; Lines = $lines }
+    }
+
+    $bVT = Measure-Table $tblVT
+    $bRT = Measure-Table $tblRTTI
+    Write-Host "  before: VTABLE ids=$($bVT.Ids) lines=$($bVT.Lines) | RTTI ids=$($bRT.Ids) lines=$($bRT.Lines)"
 
     Get-GitFile $clf4 'dev-1.10.163' 'CommonLibF4/include/RE/VTABLE_IDs.h' $tblVT
     Get-GitFile $clf4 'dev-1.10.163' 'CommonLibF4/include/RE/RTTI_IDs.h'   $tblRTTI
 
-    $afterVT   = (Select-String -Path $tblVT   -Pattern 'REL::ID\(' -AllMatches).Matches.Count
-    $afterRTTI = (Select-String -Path $tblRTTI -Pattern 'REL::ID\(' -AllMatches).Matches.Count
-    Write-Host "  address-table entries after : VTABLE=$afterVT RTTI=$afterRTTI"
-    if ($afterVT -le $beforeVT -or $afterRTTI -le $beforeRTTI) {
-        throw 'address-table swap did not take effect'
-    }
+    $aVT = Measure-Table $tblVT
+    $aRT = Measure-Table $tblRTTI
+    Write-Host "  after : VTABLE ids=$($aVT.Ids) lines=$($aVT.Lines) | RTTI ids=$($aRT.Ids) lines=$($aRT.Lines)"
+
+    # Each table is checked independently: the file must have been replaced with
+    # a non-empty one of a different shape than before.
+    if ($aVT.Lines -le 0 -or $aVT.Ids -le 0) { throw 'VTABLE_IDs.h looks empty after the swap' }
+    if ($aRT.Lines -le 0) { throw 'RTTI_IDs.h looks empty after the swap' }
+    if ($aVT.Lines -eq $bVT.Lines -and $aVT.Ids -eq $bVT.Ids) { throw 'VTABLE_IDs.h was not actually replaced' }
+    if ($aRT.Lines -eq $bRT.Lines) { throw 'RTTI_IDs.h was not actually replaced' }
+    Write-Host '  address-table swap verified' -ForegroundColor Green
 } else {
     Write-Host '  (not a git checkout or tables missing -- skipping address-table swap)' -ForegroundColor Yellow
 }
