@@ -596,12 +596,12 @@ BytePad<0x20> pad_580;         // 580
 		static_assert(offsetof(TTSShadowStatePlaceholder, CameraData) == 0x000, "CameraData must be 0x000");
 		static_assert(offsetof(TTSShadowStatePlaceholder, PosAdjust) == 0x210, "PosAdjust must be 0x210");
 
-		class Context
+		class TTSContextPlaceholder
 		{
 		public:
 			TTSShadowStatePlaceholder shadowState;   // 0000
 		};
-		static_assert(offsetof(Context, shadowState) == 0x0000, "Context::shadowState must be 0x0000");
+		static_assert(offsetof(TTSContextPlaceholder, shadowState) == 0x0000, "TTSContextPlaceholder::shadowState must be 0x0000");
 	}
 
 	// ========================================================================
