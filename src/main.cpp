@@ -220,6 +220,7 @@ namespace ThroughScope
 // Initialization thread function
 DWORD WINAPI InitThread(HMODULE hModule)
 {
+	TTS_TRACE("THREAD-TRACE: InitThread started, waiting for renderer");
 	while (!BSGraphics::RendererData::GetSingleton() 
 		|| !BSGraphics::RendererData::GetSingleton()->renderWindow 
 		|| !BSGraphics::RendererData::GetSingleton()->renderWindow->hwnd 
@@ -228,24 +229,31 @@ DWORD WINAPI InitThread(HMODULE hModule)
 		|| !RE::BSGraphics::RendererData::GetSingleton()->context) {
 		Sleep(10);
 	}
+	TTS_TRACE("THREAD-TRACE: renderer ready (RendererData/hwnd/swapChain/device/context)");
 
 	// Wait for the game world to be fully loaded
+	TTS_TRACE("THREAD-TRACE: waiting for game world");
 	while (!RE::PlayerCharacter::GetSingleton() || !RE::PlayerCharacter::GetSingleton()->Get3D() || !RE::PlayerControls::GetSingleton() || !RE::PlayerCamera::GetSingleton() || !RE::Main::WorldRootCamera()) 
 	{
 		Sleep(500);
 	}
+	TTS_TRACE("THREAD-TRACE: game world loaded");
 	logger::info("TrueThroughScope: Game world loaded, initializing ThroughScope...");
 
 	// Initialize systems
 	logger::info("TrueThroughScope: About to initialize ImGui - checking for AntTweakBar conflicts...");
 	g_renderStateMgr->SetImGuiManagerInit(ThroughScope::ImGuiManager::GetSingleton()->Initialize());
+	TTS_TRACE("THREAD-TRACE: ImGuiManager done");
 
 	bool scopeReady = ThroughScope::ScopeCamera::Initialize();
+	TTS_TRACE(scopeReady ? "THREAD-TRACE: ScopeCamera::Initialize -> TRUE" : "THREAD-TRACE: ScopeCamera::Initialize -> FALSE");
 	bool renderReady = ThroughScope::RenderUtilities::Initialize();
+	TTS_TRACE(renderReady ? "THREAD-TRACE: RenderUtilities::Initialize -> TRUE" : "THREAD-TRACE: RenderUtilities::Initialize -> FALSE");
 	
 	// Initialize RenderTargetMerger for centralized RT backup/merge
 	if (renderReady) {
 		ThroughScope::RenderTargetMerger::GetInstance().Initialize();
+		TTS_TRACE("THREAD-TRACE: RenderTargetMerger done");
 	}
 
 	// Update render state manager
@@ -259,6 +267,7 @@ DWORD WINAPI InitThread(HMODULE hModule)
 	ThroughScope::SetCullingSafetyMargin(globalSettings.cullingSafetyMargin);
 	ThroughScope::SetShadowCasterRange(globalSettings.shadowCasterRange);
 
+	TTS_TRACE("THREAD-TRACE: ThroughScope initialization COMPLETED");
 	logger::info("TrueThroughScope: ThroughScope initialization completed");
 	return 0;
 }
@@ -266,24 +275,33 @@ DWORD WINAPI InitThread(HMODULE hModule)
 // Initialize the plugin
 void InitializePlugin()
 {
+	TTS_TRACE("INIT-TRACE: InitializePlugin ENTER");
 	logger::info("TrueThroughScope: Plugin initialization started");
 
 	ThroughScope::g_pchar = RE::PlayerCharacter::GetSingleton();
+	TTS_TRACE("INIT-TRACE: PlayerCharacter::GetSingleton done");
 	g_hookMgr->RegisterAllHooks();
+	TTS_TRACE("INIT-TRACE: RegisterAllHooks done");
 	ThroughScope::EquipWatcher::GetSingleton()->Initialize();
+	TTS_TRACE("INIT-TRACE: EquipWatcher done");
 	ThroughScope::AnimationGraphEventWatcher::GetSingleton()->Initialize();
+	TTS_TRACE("INIT-TRACE: AnimationGraphEventWatcher done");
 
 	// Start initialization thread for components that need the game world
 	HANDLE hThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)InitThread, (HMODULE)REX::W32::GetCurrentModule(), 0, NULL);
+	TTS_TRACE("INIT-TRACE: InitThread created");
 
 	// Initialize RenderStateManager with default values
 	g_renderStateMgr->Initialize();
-	
+	TTS_TRACE("INIT-TRACE: RenderStateManager done");
+
 	// Initialize ScopeRenderingManager for fo4test compatibility detection
 	ThroughScope::ScopeRenderingManager::GetSingleton()->Initialize();
-	
+	TTS_TRACE("INIT-TRACE: ScopeRenderingManager done");
+
 	// Initialize ENB integration (will detect ENB and register callback if present)
 	ThroughScope::ENBIntegration::GetSingleton()->Initialize();
+	TTS_TRACE("INIT-TRACE: ENBIntegration done - InitializePlugin COMPLETE");
 }
 
 // F4SE Query plugin
@@ -441,23 +459,32 @@ F4SE_EXPORT bool F4SEAPI F4SEPlugin_Load(const F4SE::LoadInterface* a_f4se)
 
 	// Register for F4SE messages
 	message->RegisterListener([](F4SE::MessagingInterface::Message* msg) -> void {
+		// TTS_TRACE writes straight to tts-trace.log through Win32, so unlike the
+		// spdlog logger (flush_on(warn)) it survives an abrupt process death.
+		// That matters here: the previous run died with a completely empty
+		// TrueThroughScope.log, so we could not tell whether TTS ever initialised.
 		if (msg->type == F4SE::MessagingInterface::kGameDataReady) {
+			TTS_TRACE("MSG-TRACE: kGameDataReady ENTER");
 			// Game data is ready - this is when we should initialize
 			ThroughScope::upscalerModular = LoadLibraryA("Data/F4SE/Plugins/Fallout4Upscaler.dll");
+			TTS_TRACE("MSG-TRACE: Fallout4Upscaler LoadLibraryA done");
 			logger::info("TrueThroughScope: Game data ready, initializing plugin");
 			ThroughScope::d3dHooks->Initialize();
+			TTS_TRACE("MSG-TRACE: d3dHooks->Initialize() done");
 			InitializePlugin();
-
-			// 
-			// ThroughScope::SetLaserInvestigationMode(true);
+			TTS_TRACE("MSG-TRACE: InitializePlugin() done");
 		} else if (msg->type == F4SE::MessagingInterface::kPostLoadGame) {
+			TTS_TRACE("MSG-TRACE: kPostLoadGame ENTER");
 			logger::info("TrueThroughScope: Load a save, reset scope status");
 			ThroughScope::ImGuiManager::GetSingleton()->ForceHideCursor();
 			ResetFirstSpawnState();
+			TTS_TRACE("MSG-TRACE: kPostLoadGame done");
 		}
 		else if (msg->type == F4SE::MessagingInterface::kNewGame)
 		{
+			TTS_TRACE("MSG-TRACE: kNewGame ENTER");
 			ResetFirstSpawnState();
+			TTS_TRACE("MSG-TRACE: kNewGame done");
 		}
 	});
 
