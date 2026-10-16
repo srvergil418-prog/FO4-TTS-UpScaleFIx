@@ -1385,9 +1385,14 @@ namespace ThroughScope {
 
 		auto playerChar = RE::PlayerCharacter::GetSingleton();
 		if (uMsg == WM_MOUSEWHEEL && s_EnableFOVAdjustment && playerChar && Utilities::IsInADS(playerChar)) {
-			if (ScopeCamera::s_CurrentScopeNode) {
+			// Acquire, not a bare null-check: the setup thread can free the node
+			// between the check and the use, which is the same use-after-free the
+			// scope render path suffers from. Hold the reference for the duration.
+			auto* scopeNode = ScopeCamera::AcquireScopeNode();
+			if (scopeNode) {
 				short wheelDelta = GET_WHEEL_DELTA_WPARAM(wParam);
 				ProcessMouseWheelFOVInput(wheelDelta);
+				ScopeCamera::ReleaseScopeNode(scopeNode);
 				return true;
 			}
 		}
