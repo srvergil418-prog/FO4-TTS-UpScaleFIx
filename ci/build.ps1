@@ -633,6 +633,80 @@ if ($a2 -eq $a) { Write-Host '  [2/9] API.cpp: pattern not found -- skipping' -F
 Set-Content $api -Value $a2 -NoNewline -Encoding utf8
 Write-Host '  [2/9] API.cpp'
 
+# ================================================================ 2b) F4SE/Interfaces.h -- the 0.6.23 loader ABI
+#
+# THE PLUGIN-LOAD CRASH (0xC0000005, fault offset 0x0).
+#
+# F4SEInterface in F4SE 0.6.23 -- the loader shipped with game version 1.10.163,
+# which is what this build targets -- ENDS at GetPluginInfo:
+#
+#   +0   f4seVersion        UInt32
+#   +4   runtimeVersion     UInt32
+#   +8   editorVersion      UInt32
+#   +12  isEditor           UInt32
+#   +16  QueryInterface     fn ptr
+#   +24  GetPluginHandle    fn ptr
+#   +32  GetReleaseIndex    fn ptr
+#   +40  GetPluginInfo      fn ptr   <- LAST member; the struct is 48 bytes
+#
+# powerof3/master declares one more member at +48:
+#
+#   +48  GetSaveFolderName  fn ptr   <- F4SE 0.7.1+ ONLY, not in 0.6.23
+#
+# (the upstream header even labels it "// 0.7.1+", and the same file marks
+#  GetPluginInfo "// 0.6.22+", so the version dependency is upstream knowledge).
+#
+# CommonLibF4/src/F4SE/API.cpp::Init() then does, unconditionally:
+#
+#   storage.saveFolderName = intfc.GetSaveFolderName();
+#
+# With the 0.6.23 loader that slot holds whatever follows the interface struct
+# in the loader image -- not a code pointer. Calling it derails into unmapped
+# memory. That explains EVERY piece of the observed evidence at once:
+#
+#   - exception code 0xC0000005 (access violation) raised inside F4SE::Init
+#   - fault offset 0x0000000000000000, "faulting module: unknown" (target
+#     address 0 belongs to no loaded module -> a call through a null pointer)
+#   - xSE PluginPreloader logs "loaded" then "unloaded" ~40ms later
+#   - f4se.log: "disabled, fatal error occurred while loading plugin"
+#   - NO MessageBox: this is not stl::report_and_fail(), which would pop one
+#   - the load trace reaches "after PreInit" and then dies before
+#     "after F4SE::Init" -- Init is the only frame in between
+#
+# Why the earlier REL::ID work never helped: that is a redirect-table problem
+# and this is a struct-layout problem. Overlaying master brought in a newer
+# interface declaration along with newer IDs.
+#
+# Fix: comment the member out and make the accessor return an empty view.
+# Scope check: the TTS tree never calls GetSaveFolderName (grepped), so the
+# only consumer is the CommonLibF4 accessor itself. Every OTHER interface in
+# this header was diffed field-by-field against the 0.6.23 SDK
+# (f4se_0_06_23/src/f4se/f4se/PluginAPI.h) and matches exactly -- Messaging,
+# Scaleform, Papyrus, Serialization, Task, Object, Trampoline and PluginInfo
+# all agree, so this is the single point of incompatibility.
+#
+# Implementation notes: substring replacement via String.Replace, deliberately
+# NOT -replace (that is a regex, and these needles contain ( ) * . ) and NOT
+# whole lines, so the patch survives CRLF/LF changes and tab-indent drift in
+# the upstream checkout. If a needle ever stops matching, the build FAILS
+# rather than silently shipping a DLL that crashes on load.
+
+$intf = Join-Path $commonlibf4 "CommonLibF4/include/F4SE/Interfaces.h"
+if (-not (Test-Path $intf)) { throw "F4SE/Interfaces.h not found: $intf" }
+$intfText = [System.IO.File]::ReadAllText($intf)
+$intfOrig = $intfText
+$intfText = $intfText.Replace(
+    'const char*(F4SEAPI* GetSaveFolderName)(void);',
+    '/* [TTS CI] GetSaveFolderName is F4SE 0.7.1+; the 1.10.163 loader (F4SE 0.6.23) has no such entry */')
+$intfText = $intfText.Replace(
+    'return GetProxy().GetSaveFolderName();',
+    'return {};')
+if ($intfText -eq $intfOrig) { throw "F4SE/Interfaces.h: the 0.6.23 ABI patch matched nothing (upstream layout changed?)" }
+if ($intfText -match 'GetProxy\(\)\.GetSaveFolderName') { throw "F4SE/Interfaces.h: the GetSaveFolderName proxy call survived the patch" }
+if ($intfText -match 'F4SEAPI\* GetSaveFolderName') { throw "F4SE/Interfaces.h: the F4SEInterface member survived the patch" }
+[System.IO.File]::WriteAllText($intf, $intfText, (New-Object System.Text.UTF8Encoding($false)))
+Write-Host '  [2b/9] F4SE/Interfaces.h -- 0.6.23 ABI (GetSaveFolderName removed)' -ForegroundColor Green
+
 # ================================================================ 3) REX/LOG.cpp
 #
 # The wide-char LOG overload must be converted to UTF-8 before reaching spdlog.
