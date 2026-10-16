@@ -852,3 +852,28 @@ Write-Host ''
 Write-Host '=== built binaries ==='
 Get-ChildItem -Path build -Recurse -Include *.dll |
     Select-Object FullName, Length | Format-Table -AutoSize
+
+# ================================================================ 11) expose the PDB to the artifact
+#
+# Why this exists: a crash log gives us only "TrueThroughScope.dll+0014169", and
+# an RVA is meaningless without our own symbol table -- the author's PDB describes
+# the author's binary, not ours. Matching against it is how you end up staring at
+# std::regex internals wondering what it has to do with scopes.
+#
+# The workflow's artifact glob is "build/**/TrueThroughScope.dll" and editing that
+# workflow needs the PAT 'workflow' scope, which we do not have (HTTP 403). So do
+# not touch the workflow: park a copy of the PDB in a subdirectory under the same
+# file name the glob already matches. upload-artifact preserves relative paths, so
+# the downloader can tell the two apart and rename this one back to .pdb.
+$pdbFile = Get-ChildItem -Path build -Recurse -Filter 'TrueThroughScope.pdb' -File -ErrorAction SilentlyContinue |
+           Select-Object -First 1
+if ($pdbFile) {
+    $slot = Join-Path (Split-Path $pdbFile.FullName -Parent) 'symbols-as-dll'
+    New-Item -ItemType Directory -Force -Path $slot | Out-Null
+    Copy-Item -Path $pdbFile.FullName -Destination (Join-Path $slot 'TrueThroughScope.dll') -Force
+    Write-Host ("  [artifact] PDB exposed as " + (Join-Path $slot 'TrueThroughScope.dll'))
+} else {
+    Write-Host '  [artifact] WARNING: no TrueThroughScope.pdb was produced -- crash RVAs stay untranslatable'
+    Get-ChildItem -Path build -Recurse -Include *.pdb,*.ilk -ErrorAction SilentlyContinue |
+        Select-Object FullName | Format-Table -AutoSize
+}
