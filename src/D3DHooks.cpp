@@ -1273,52 +1273,64 @@ namespace ThroughScope {
 
 	void WINAPI D3DHooks::hkRSSetViewports(ID3D11DeviceContext* pContext, UINT NumViewports, const D3D11_VIEWPORT* pViewports)
 	{
-		// 如果正在进行瞄具渲染，确保使用正确的全屏viewport
-		// 这样可以防止其他MOD（如BakaFullscreenPipboy）的viewport修改影响瞄具渲染
+		// TTS + upscaling (Upscaling Custom / DLSS / FSR) compatibility.
+		//
+		// During scope-camera rendering the ACTIVE render target can be smaller than
+		// the swap-chain back buffer: spatial upscaling renders the scene at an
+		// internal resolution and only presents at output size.
+		//
+		// The previous code compared the incoming viewport against the swap-chain
+		// back buffer (output size, e.g. 3840x2160). Seeing the internal viewport
+		// (e.g. 1920x1080) as "too small", it replaced it with the output size --
+		// which on a smaller render target draws into the top-left corner only.
+		// That is precisely the reported symptom, and it gets worse as the
+		// upscaler preset lowers the internal resolution further.
+		//
+		// Correct against the texture ACTUALLY bound as render target instead.
+		// (Approach from the community viewport-compatibility patch.)
 		if (ScopeCamera::IsRenderingForScope() && NumViewports > 0 && pViewports != nullptr) {
-			// 获取swap chain的后台缓冲区尺寸来确定正确的viewport
-			Microsoft::WRL::ComPtr<ID3D11Device> device;
-			pContext->GetDevice(&device);
+			Microsoft::WRL::ComPtr<ID3D11RenderTargetView> activeRTV;
+			pContext->OMGetRenderTargets(1, activeRTV.GetAddressOf(), nullptr);
 
-			if (device && s_SwapChain) {
-				Microsoft::WRL::ComPtr<ID3D11Texture2D> backBuffer;
-				if (SUCCEEDED(s_SwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&backBuffer))) {
-					D3D11_TEXTURE2D_DESC desc;
-					backBuffer->GetDesc(&desc);
+			if (activeRTV) {
+				Microsoft::WRL::ComPtr<ID3D11Resource> activeResource;
+				activeRTV->GetResource(activeResource.GetAddressOf());
 
-					// 检查传入的viewport是否与预期的全屏viewport匹配
-					// 如果不匹配（可能被其他MOD修改了），则强制使用正确的全屏viewport
-					const D3D11_VIEWPORT& vp = pViewports[0];
-					bool needsCorrection = false;
+				Microsoft::WRL::ComPtr<ID3D11Texture2D> activeTexture;
+				if (activeResource && SUCCEEDED(activeResource.As(&activeTexture))) {
+					D3D11_TEXTURE2D_DESC desc{};
+					activeTexture->GetDesc(&desc);
 
-					// 检查viewport是否明显偏离全屏设置
-					if (vp.Width < desc.Width * 0.9f || vp.Height < desc.Height * 0.9f ||
-						vp.TopLeftX > desc.Width * 0.1f || vp.TopLeftY > desc.Height * 0.1f) {
-						needsCorrection = true;
-					}
+					if (desc.Width > 0 && desc.Height > 0) {
+						const D3D11_VIEWPORT& vp = pViewports[0];
+						const bool needsCorrection =
+							vp.Width < static_cast<float>(desc.Width) * 0.9f ||
+							vp.Height < static_cast<float>(desc.Height) * 0.9f ||
+							vp.TopLeftX < 0.0f || vp.TopLeftY < 0.0f ||
+							vp.TopLeftX > static_cast<float>(desc.Width) * 0.1f ||
+							vp.TopLeftY > static_cast<float>(desc.Height) * 0.1f;
 
-					if (needsCorrection) {
-						// 创建正确的全屏viewport
-						D3D11_VIEWPORT fullViewport;
-						fullViewport.TopLeftX = 0.0f;
-						fullViewport.TopLeftY = 0.0f;
-						fullViewport.Width = static_cast<float>(desc.Width);
-						fullViewport.Height = static_cast<float>(desc.Height);
-						fullViewport.MinDepth = 0.0f;
-						fullViewport.MaxDepth = 1.0f;
-
-						// 使用正确的全屏viewport
-						return phookD3D11RSSetViewports(pContext, 1, &fullViewport);
+						if (needsCorrection) {
+							D3D11_VIEWPORT targetViewport{};
+							targetViewport.TopLeftX = 0.0f;
+							targetViewport.TopLeftY = 0.0f;
+							targetViewport.Width = static_cast<float>(desc.Width);
+							targetViewport.Height = static_cast<float>(desc.Height);
+							targetViewport.MinDepth = 0.0f;
+							targetViewport.MaxDepth = 1.0f;
+							return phookD3D11RSSetViewports(pContext, 1, &targetViewport);
+						}
 					}
 				}
 			}
 		}
 
-		// 正常情况下透传调用
+		// If the active target cannot be queried, pass the engine/upscaler viewport
+		// through unchanged rather than falling back to the display resolution.
 		return phookD3D11RSSetViewports(pContext, NumViewports, pViewports);
 	}
 
-	void D3DHooks::ProcessGamepadFOVInput()
+void D3DHooks::ProcessGamepadFOVInput()
 	{
 		// 先通过游戏的输入管理器检测手柄是否连接
 		auto inputMgr = RE::BSInputDeviceManager::GetSingleton();

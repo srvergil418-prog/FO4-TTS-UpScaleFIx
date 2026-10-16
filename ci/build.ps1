@@ -142,6 +142,44 @@ if ((Test-Path (Join-Path $clf4 ".git")) -and (Test-Path $clf4Inc)) {
         Pop-Location
     }
 
+    # ------------------------------------------------------------------
+    # Drop the master-only headers that dev-1.10.163 CONSOLIDATED into a
+    # single file. Overlaying dev ADDS its split headers while master's
+    # combined one stays behind, so both end up defining the same classes:
+    #
+    #   master  RE/NetImmerse/NiPoint.h        defines NiPoint2/3/4
+    #   dev     RE/NetImmerse/NiPoint2.h +
+    #           RE/NetImmerse/NiPoint3.h      same classes -> C2011
+    #
+    #   REL/ was likewise folded into REL/Relocation.h on dev
+    #   (REL/Segment.h vs Relocation.h both defining REL::Segment).
+    #
+    # Verified safe: grepping the whole TTS tree shows it only includes
+    # RE/NetImmerse/NiCamera.hpp and NiFrustum.hpp, both of which are its own
+    # forwarding headers -- it never includes REL/*.h or NiPoint*.h directly.
+    # ------------------------------------------------------------------
+    $consolidated = @(
+        "include/RE/NetImmerse/NiPoint.h",
+        "include/REL/IAT.h",
+        "include/REL/ID.h",
+        "include/REL/IDDB.h",
+        "include/REL/Module.h",
+        "include/REL/Offset.h",
+        "include/REL/Offset2ID.h",
+        "include/REL/REL.h",
+        "include/REL/Segment.h",
+        "include/REL/Version.h"
+    )
+    $dropped = 0
+    foreach ($rel in $consolidated) {
+        $full = Join-Path $clf4 $rel
+        if (Test-Path $full) { Remove-Item $full -Force -ErrorAction SilentlyContinue; $dropped++ }
+    }
+    Write-Host ("  dropped " + $dropped + " master-only header(s) consolidated into dev files")
+
+    # A few files existed only so the old split headers could exist; if the
+    # matching .cpp is gone the CMake list already excludes it, so nothing to do.
+
     if (-not (Test-Path $iseHdr)) { throw "ImageSpaceEffect.h disappeared after the overlay" }
 
     $idsAfter = Get-RelIds $iseHdr
