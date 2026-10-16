@@ -13,6 +13,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <format>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -375,7 +376,35 @@ F4SE_EXPORT bool F4SEAPI F4SEPlugin_Load(const F4SE::LoadInterface* a_f4se)
 	ThroughScope::d3dHooks->PreInit();
 	TTS_TRACE("LOAD-TRACE-08 after PreInit");
 
-	TTS_TRACE("LOAD-TRACE-09 before F4SE::Init");
+		// VER-TRACE: Module::get().version() drives the address-library filename.
+	// If it is not 1.10.163.0 the .bin lookup fails and IDDB report_and_fail()s.
+	try {
+		const auto _v  = REL::Module::get().version();
+		const auto _vs = std::format("VER-TRACE: Module version = {}", _v.string());
+		TTS_TraceWrite(_vs.c_str());
+	} catch (...) {
+		TTS_TraceWrite("VER-TRACE: REL::Module::get().version() threw");
+	}
+
+	{
+		char _pbuf[320] = { 0 };
+		const DWORD _attr = GetFileAttributesA("Data/F4SE/Plugins/version-1-10-163-0.bin");
+		wsprintfA(_pbuf, "VER-TRACE: GetFileAttributes(Data/F4SE/Plugins/version-1-10-163-0.bin) = %lu (0xFFFFFFFF = missing)",
+		          (unsigned long)_attr);
+		TTS_TraceWrite(_pbuf);
+
+		char _cwd[MAX_PATH] = { 0 };
+		GetCurrentDirectoryA(MAX_PATH, _cwd);
+		char _cbuf[MAX_PATH + 40] = { 0 };
+		wsprintfA(_cbuf, "VER-TRACE: cwd = %s", _cwd);
+		TTS_TraceWrite(_cbuf);
+
+		const DWORD _attr2 = GetFileAttributesA("E:\\Custom Fallout4\\Fallout 4\\Data\\F4SE\\Plugins\\version-1-10-163-0.bin");
+		wsprintfA(_pbuf, "VER-TRACE: absolute E:\\ path attr = %lu", (unsigned long)_attr2);
+		TTS_TraceWrite(_pbuf);
+	}
+
+TTS_TRACE("LOAD-TRACE-09 before F4SE::Init");
 	F4SE::Init(a_f4se);
 	TTS_TRACE("LOAD-TRACE-10 after F4SE::Init");
 	// Register plugin for F4SE messages
