@@ -10,6 +10,7 @@
 // !! binary-verified definition.
 // ============================================================================
 
+#include <xmmintrin.h>   // __m128 (RendererShadowState::CameraData_t)
 #include <cstddef>   // offsetof，供下面的偏移断言使用
 #include <vector>
 
@@ -554,6 +555,54 @@ BytePad<0x20> pad_580;         // 580
 	public:
 		BytePad<0x20> pad_1A0;
 	};
+
+	// ------------------------------------------------------------------------
+	// BSGraphics::RendererShadowState  and  BSGraphics::Context
+	//
+	// dev-1.10.163 only FORWARD-DECLARES RendererShadowState (BSGraphics.h:46)
+	// and has no Context class at all -- both belong to the author private
+	// library. TTS reaches them like this (SecondPassRenderer.cpp:607-648):
+	//
+	//     uintptr_t contextPtr = <TLS slot 2848>;   // or DefaultContext
+	//     auto context = (RE::BSGraphics::Context*)contextPtr;
+	//     ... context->shadowState.CameraData.viewProjMat[4]
+	//     ... context->shadowState.PosAdjust
+	//
+	// So Context must embed a RendererShadowState BY VALUE, and that state must
+	// expose CameraData (viewProjMat at +0x0D0) and PosAdjust at +0x210. Those
+	// offsets mirror CameraStateData and are the same numbers the earlier
+	// master-side header patch used.
+	//
+	// Defining this here rather than patching the library header is deliberate:
+	// the library is now dev-1.10.163 (overlaid by ci/build.ps1), whose
+	// BSGraphics.h looks nothing like master, so a text patch would be brittle.
+	// ------------------------------------------------------------------------
+	namespace BSGraphics
+	{
+		class alignas(0x10) RendererShadowState
+		{
+		public:
+			struct CameraData_t
+			{
+				BytePad<0x0D0>                  pad0;
+				__m128                          viewProjMat[4];        // 0D0
+				BytePad<0x210 - 0x0D0 - 0x40>   pad1;                 // 110
+			};
+			static_assert(sizeof(CameraData_t) == 0x210, "CameraData_t must be 0x210");
+
+			CameraData_t CameraData;   // 000
+			NiPoint3     PosAdjust;    // 210
+		};
+		static_assert(offsetof(RendererShadowState, CameraData) == 0x000, "CameraData must be 0x000");
+		static_assert(offsetof(RendererShadowState, PosAdjust) == 0x210, "PosAdjust must be 0x210");
+
+		class Context
+		{
+		public:
+			RendererShadowState shadowState;   // 0000
+		};
+		static_assert(offsetof(Context, shadowState) == 0x0000, "Context::shadowState must be 0x0000");
+	}
 
 	// ========================================================================
 	// BSRenderPass -- only forward-declared in powerof3 (BSShaderProperty.h:11).

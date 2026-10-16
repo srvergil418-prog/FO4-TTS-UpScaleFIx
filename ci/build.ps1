@@ -362,32 +362,6 @@ Write-Host '  [8c/9] CMakeLists.txt HLSL output paths -> single build-local dir'
 # named nearPlane/farPlane -- exactly what TTS's sources already write. This
 # avoids <Windows.h>'s empty near/far macros entirely, with no #undef games.
 
-# ================================================================ 10) RendererShadowState
-# powerof3 leaves RendererShadowState as an opaque 0x910-byte blob, but TTS
-# reads shadowState.CameraData.viewProjMat and shadowState.PosAdjust.
-# Offsets mirror CameraStateData (the equivalent structure State uses:
-# ViewData @ 000 with viewProjMat @ 0D0, and posAdjust @ 210).
-$bgp = Join-Path $commonlibf4 'CommonLibF4/include/RE/Bethesda/BSGraphics.h'
-$b = Get-Content $bgp -Raw
-$bNew = $b.Replace(
-    "			std::byte pad[0x910];  // 000",
-    "			// build shim: TTS reads shadowState.CameraData.viewProjMat and`r`n" +
-    "			// shadowState.PosAdjust. Offsets mirror CameraStateData (ViewData @ 000,`r`n" +
-    "			// viewProjMat @ 0D0, posAdjust @ 210), the structure State uses.`r`n" +
-    "			struct CameraData_t`r`n" +
-    "			{`r`n" +
-    "				std::byte pad0[0x0D0];`r`n" +
-    "				__m128    viewProjMat[4];             // 0D0`r`n" +
-    "				std::byte pad1[0x210 - 0x0D0 - 0x40]; // 110`r`n" +
-    "			};`r`n" +
-    "			static_assert(sizeof(CameraData_t) == 0x210);`r`n" +
-    "`r`n" +
-    "			CameraData_t CameraData;  // 000`r`n" +
-    "			NiPoint3     PosAdjust;   // 210`r`n" +
-    "			std::byte    pad[0x6F4];  // 21C")
-if ($bNew -eq $b) { throw 'BSGraphics.h: RendererShadowState placeholder not found' }
-Set-Content $bgp -Value $bNew -NoNewline -Encoding utf8
-Write-Host '  [10/12] RendererShadowState += CameraData / PosAdjust'
 
 # ================================================================ 11) downgrade engine entry points
 # These are engine functions that only the author's private library exposes.
