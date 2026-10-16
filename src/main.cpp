@@ -376,18 +376,58 @@ F4SE_EXPORT bool F4SEAPI F4SEPlugin_Load(const F4SE::LoadInterface* a_f4se)
 	ThroughScope::d3dHooks->PreInit();
 	TTS_TRACE("LOAD-TRACE-08 after PreInit");
 
-		// VER-TRACE: Module::get().version() drives the address-library filename.
-	// If it is not 1.10.163.0 the .bin lookup fails and IDDB report_and_fail()s.
+	// NOTE ON THE EARLIER SUSPECT: the load crash was first blamed on
+	// REL::IDDB::get() -> mmio::mapped_file_source::open() failing. That was
+	// WRONG: a failing mmap would route through stl::report_and_fail(), which
+	// pops a MessageBox and calls TerminateProcess. No MessageBox was ever seen.
+	// The real fault is the F4SE 0.6.23 vs 0.7.1 interface-layout mismatch
+	// described below and fixed in ci/build.ps1 step [2b/9].
+	//
+	// IFACE-DUMP: read the loader-provided interface table ourselves, before
+	// F4SE::Init touches it. The 1.10.163 loader is F4SE 0.6.23, whose
+	// F4SEInterface ENDS at GetPluginInfo (+40). powerof3/master declares one
+	// extra member at +48, GetSaveFolderName ("0.7.1+"), and F4SE::Init() calls
+	// it unconditionally -- which is the 0xC0000005 @ offset 0. Slot q6 below
+	// is that member; q3/q4/q5 are GetPluginHandle/GetReleaseIndex/GetPluginInfo
+	// and should look like real code addresses inside f4se_loader / Fallout4.
+	{
+		const auto* _raw = reinterpret_cast<const std::uintptr_t*>(a_f4se);
+		char _db[512] = { 0 };
+		wsprintfA(_db, "IFACE-DUMP: base=%p q0=%p q1=%p q2=%p q3=%p q4=%p q5=%p q6=%p q7=%p",
+			static_cast<const void*>(a_f4se),
+			reinterpret_cast<const void*>(_raw[0]),
+			reinterpret_cast<const void*>(_raw[1]),
+			reinterpret_cast<const void*>(_raw[2]),
+			reinterpret_cast<const void*>(_raw[3]),
+			reinterpret_cast<const void*>(_raw[4]),
+			reinterpret_cast<const void*>(_raw[5]),
+			reinterpret_cast<const void*>(_raw[6]),
+			reinterpret_cast<const void*>(_raw[7]));
+		TTS_TraceWrite(_db);
+	}
+
 	// EXC-TRACE: catch access violations too. catch(...) does NOT catch SEH,
-	// and the crash inside F4SE::Init (-> REL::IDDB::get()) is a real
-	// access violation, so use __try/__except and record the code + the
-	// failing address.
+	// and the crash inside F4SE::Init is a real access violation, so use
+	// __try/__except. The exception record is captured in the filter expression
+	// (GetExceptionInformation is only valid there) into a static so the handler
+	// can report the faulting address and the access-violation operands:
+	// info0 == 8 means "execute", i.e. a call through a null/garbage pointer.
+	static PEXCEPTION_POINTERS s_excPtrs = nullptr;
 	__try {
 		F4SE::Init(a_f4se);
 		TTS_TRACE("EXC-TRACE: F4SE::Init returned normally");
-	} __except (EXCEPTION_EXECUTE_HANDLER) {
-		char _ebuf[256] = { 0 };
-		wsprintfA(_ebuf, "EXC-TRACE: SEH caught, code=0x%08lX", (unsigned long)GetExceptionCode());
+	} __except (s_excPtrs = GetExceptionInformation(), EXCEPTION_EXECUTE_HANDLER) {
+		char _ebuf[512] = { 0 };
+		const auto* _er = (s_excPtrs ? s_excPtrs->ExceptionRecord : nullptr);
+		if (_er) {
+			wsprintfA(_ebuf, "EXC-TRACE: code=0x%08lX addr=%p info0=%lu info1=%p",
+				(unsigned long)_er->ExceptionCode,
+				static_cast<const void*>(_er->ExceptionAddress),
+				(unsigned long)(_er->NumberParameters > 0 ? _er->ExceptionInformation[0] : 0),
+				static_cast<const void*>(_er->NumberParameters > 1 ? _er->ExceptionInformation[1] : 0));
+		} else {
+			wsprintfA(_ebuf, "EXC-TRACE: SEH caught, code=0x%08lX (no exception record)", (unsigned long)GetExceptionCode());
+		}
 		TTS_TraceWrite(_ebuf);
 		return false;
 	}
