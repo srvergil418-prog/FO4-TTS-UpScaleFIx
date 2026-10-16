@@ -79,23 +79,23 @@ namespace RE
 	class BSLight : public NiRefObject
 	{
 	public:
-		BytePad<0x10 - sizeof(NiRefObject)> pad_010;
+		BytePad<PadBytes(0x10 - sizeof(NiRefObject))> pad_010;
 
 		float   fLODDimmer;      // 10
 		float   fLuminance;      // 14
 		std::uint32_t usFrustumCull;  // 18
-		BytePad<0x140 - 0x1C> pad_01C;  // 1C .. 13F (gobo projection, shape rotation, radius, spLight, fade-node list, fences, arrays, pPortalGraph)
+		BytePad<PadBytes(0x140 - 0x1C)> pad_01C;  // 1C .. 13F (gobo projection, shape rotation, radius, spLight, fade-node list, fences, arrays, pPortalGraph)
 
 		BSCullingProcess*            pCullingProcess;  // 140
 		NiPointer<BSGeometry>        spGeometry;       // 148
 		NiPointer<NiCamera>          spCamera;         // 150
 		NiPointer<NiTexture>         spGoboTexture;    // 158
-		BytePad<0x170 - 0x160> pad_160;              // 160
+		BytePad<PadBytes(0x170 - 0x160)> pad_160;              // 160
 
 		bool bPointLight;        // 170
 		bool bAmbientLight;      // 171
 		bool bDynamicLight;      // 172
-		BytePad<0x175 - 0x173> pad_173;  // 173 (bSpotLight/bShadowLight)
+		BytePad<PadBytes(0x175 - 0x173)> pad_173;  // 173 (bSpotLight/bShadowLight)
 		bool bAffectLand;        // 175
 		bool bAffectWater;       // 176
 		bool bLODFade;           // 177
@@ -106,7 +106,7 @@ namespace RE
 		bool bOccluded;          // 17C
 		bool bStencilVolume;     // 17D
 		bool bTemporary;         // 17E
-		BytePad<0x236 - 0x17F> pad_17F;  // 17F .. 235
+		BytePad<PadBytes(0x236 - 0x17F)> pad_17F;  // 17F .. 235
 
 		// --- setters called by LightBackupSystem::RestoreLightState ---
 		// All ten now write their real field at its PDB-verified offset.
@@ -396,7 +396,7 @@ namespace RE
 	class ShadowSceneNode : public NiNode
 	{
 	public:
-		BytePad<0x140 - sizeof(NiNode)> pad_140;   // up to the first PDB member
+		BytePad<PadBytes(0x140 - sizeof(NiNode))> pad_140;   // up to the first PDB member
 
 		bool          bFrustumAddedToVis;      // 140
 		BytePad<3> pad_141;              // 141
@@ -411,7 +411,7 @@ namespace RE
 		BSTArray<NiPointer<BSLight>> lAmbientLightList;  // 188
 		BSTArray<NiPointer<BSLight>> lLightQueueAdd;     // 1A0
 		BSTArray<NiPointer<BSLight>> lLightQueueRemove;  // 1B8
-		BytePad<0x1F8 - 0x1D0> pad_1D0;  // 1D0 (SSNLightQueueCrit + DecalList + DecalListLock + pad)
+		BytePad<PadBytes(0x1F8 - 0x1D0)> pad_1D0;  // 1D0 (SSNLightQueueCrit + DecalList + DecalListLock + pad)
 
 		BSLight*      pSunLight;               // 1F8
 		BSLight*      pCloudSunLight;          // 200
@@ -423,7 +423,7 @@ namespace RE
 		bool          bWireframe;              // 226
 		bool          bOpaqueWireframe;        // 227
 		bool          bAlwaysUpdateLights;     // 228
-		BytePad<0x30C - 0x229> pad_229;  // 229 .. 30B (spFog/pBSPortalGraph/lShadowLightAccum/... )
+		BytePad<PadBytes(0x30C - 0x229)> pad_229;  // 229 .. 30B (spFog/pBSPortalGraph/lShadowLightAccum/... )
 
 		NiPoint3A     kEyePosition;            // 30C
 	};
@@ -460,7 +460,7 @@ namespace RE
 		NiFrustum          m_kFrustum;                // 20
 		NiFrustumPlanes    m_kPlanes;                 // 3C
 		NiFrustumPlanes    kCustomCullPlanes;         // AC
-		BytePad<0x11C - 0xAC - sizeof(NiFrustumPlanes)> pad_11C;  // 11C
+		BytePad<PadBytes(0x11C - 0xAC - sizeof(NiFrustumPlanes))> pad_11C;  // 11C
 
 		bool               m_bCameraRelatedUpdates;   // 11C
 		bool               bUpdateAccumulateFlag;     // 11D
@@ -498,11 +498,11 @@ namespace RE
 	class BSCullingProcess : public NiCullingProcess
 	{
 	public:
-		BytePad<0x120 - sizeof(NiCullingProcess)> pad_120;   // 120
-		BytePad<0x150 - 0x120> kRoomSharedMap_pad;           // 120 (BSTScatterTable, not needed)
+		BytePad<PadBytes(0x120 - sizeof(NiCullingProcess))> pad_120;   // 120
+		BytePad<PadBytes(0x150 - 0x120)> kRoomSharedMap_pad;           // 120 (BSTScatterTable, not needed)
 		void*     pPortalGraphEntry;   // 150
 		std::uint32_t kCullMode;       // 158
-		BytePad<0x184 - 0x15C> pad_15C;  // 15C (eTypeStackA, 0x28 bytes)
+		BytePad<PadBytes(0x184 - 0x15C)> pad_15C;  // 15C (eTypeStackA, 0x28 bytes)
 		std::int32_t  iCTStackIndex;   // 184
 		void*         pCompoundFrustum;// 188
 		NiPointer<NiAccumulator> spAccumulator;  // 190
@@ -574,6 +574,80 @@ namespace RE
 	};
 }
 
+
+
+// ===========================================================================
+// sizeof cross-checks for the layouts above.
+//
+// These are deliberately SEPARATE from the offsetof asserts: if one of these
+// types has an unexpected size, we want the compiler to print the real number
+// here, rather than letting it silently underflow a padding expression into
+// 2^64-8 (which surfaces only as the useless "C2148: total size of array must
+// not exceed 0x7fffffff").
+// ===========================================================================
+namespace RE
+{
+	static_assert(sizeof(NiPlane) == 0x10, "NiPlane must be 0x10");
+	static_assert(sizeof(NiFrustumPlanes) == 0x70, "NiFrustumPlanes must be 0x70");
+	static_assert(sizeof(NiFrustum) == 0x1C, "NiFrustum must be 0x1C");
+	static_assert(sizeof(ShadowSceneNode) == 0x320, "ShadowSceneNode must be 0x320 (NiNode 0x140 + PDB tail)");
+	static_assert(sizeof(NiCullingProcess) == 0x120, "NiCullingProcess must be 0x120");
+	static_assert(sizeof(BSLight) == 0x236, "BSLight must be 0x236");
+}
+
+// ===========================================================================
+// TEMPORARY DIAGNOSTIC -- remove once every layout is green.
+//
+// MSVC's static_assert does not print the offending values, so a layout that
+// underflows only shows up as an opaque number (2^64-8 for -8) and we cannot
+// tell WHICH member drifted. The classic workaround: instantiate an undefined
+// template whose argument is the value. The compiler then reports e.g.
+//     error C2027: use of undefined type 'RE::ShowSize<288>'
+// which is the real number (288 = 0x120).
+//
+// Each line carries the EXPECTED value so the diff is immediate.
+// Set SHOW_LAYOUT_SIZES to 0 to silence.
+// ===========================================================================
+#define SHOW_LAYOUT_SIZES 1
+#if SHOW_LAYOUT_SIZES
+namespace RE
+{
+	template <std::size_t N> struct ShowSize;   // deliberately undefined
+
+	// ---- sizeof ----
+	ShowSize<sizeof(NiPlane)>          show_sz_NiPlane;           // expect  16 = 0x010
+	ShowSize<sizeof(NiFrustum)>        show_sz_NiFrustum;         // expect  28 = 0x01C
+	ShowSize<sizeof(NiFrustumPlanes)>  show_sz_NiFrustumPlanes;   // expect 112 = 0x070
+	ShowSize<alignof(NiFrustumPlanes)> show_al_NiFrustumPlanes;   // expect   4
+	ShowSize<sizeof(NiRefObject)>      show_sz_NiRefObject;       // expect  16 = 0x010
+	ShowSize<sizeof(NiNode)>           show_sz_NiNode;            // expect 320 = 0x140
+	ShowSize<sizeof(NiCullingProcess)> show_sz_NiCullingProcess;  // expect 288 = 0x120
+	ShowSize<sizeof(BSLight)>          show_sz_BSLight;           // expect 566 = 0x236
+	ShowSize<sizeof(ShadowSceneNode)>  show_sz_ShadowSceneNode;   // expect 800 = 0x320
+
+	// ---- offsetof: NiCullingProcess ----
+	ShowSize<offsetof(NiCullingProcess, m_pkVisibleSet)>      show_of_ncp_vis;   // expect  16 = 0x010
+	ShowSize<offsetof(NiCullingProcess, m_pkCamera)>          show_of_ncp_cam;   // expect  24 = 0x018
+	ShowSize<offsetof(NiCullingProcess, m_kFrustum)>          show_of_ncp_fru;   // expect  32 = 0x020
+	ShowSize<offsetof(NiCullingProcess, m_kPlanes)>           show_of_ncp_pla;   // expect  60 = 0x03C
+	ShowSize<offsetof(NiCullingProcess, kCustomCullPlanes)>   show_of_ncp_ccp;   // expect 172 = 0x0AC
+	ShowSize<offsetof(NiCullingProcess, bCustomCullPlanes)>   show_of_ncp_bcc;   // expect 287 = 0x11F
+
+	// ---- offsetof: BSCullingProcess ----
+	ShowSize<offsetof(BSCullingProcess, pPortalGraphEntry)>   show_of_bsc_pge;   // expect 336 = 0x150
+	ShowSize<offsetof(BSCullingProcess, kCullMode)>           show_of_bsc_kcm;   // expect 344 = 0x158
+	ShowSize<offsetof(BSCullingProcess, pCompoundFrustum)>    show_of_bsc_pcf;   // expect 392 = 0x188
+
+	// ---- offsetof: BSLight ----
+	ShowSize<offsetof(BSLight, fLODDimmer)>                   show_of_bl_fld;    // expect  16 = 0x010
+	ShowSize<offsetof(BSLight, pCullingProcess)>              show_of_bl_pcp;    // expect 320 = 0x140
+	ShowSize<offsetof(BSLight, bTemporary)>                   show_of_bl_btm;    // expect 382 = 0x17E
+
+	// ---- offsetof: ShadowSceneNode ----
+	ShowSize<offsetof(ShadowSceneNode, fStoredFarClip)>       show_of_ssn_ffc;   // expect 324 = 0x144
+	ShowSize<offsetof(ShadowSceneNode, kEyePosition)>         show_of_ssn_eye;   // expect 780 = 0x30C
+}
+#endif
 
 // NOTE: no "#undef near/far" is needed any more.
 // include/RE/NetImmerse/NiFrustum.h overrides the library header and names
