@@ -309,9 +309,9 @@ namespace RE
 		const auto& world = a_camera->world;
 		const auto& frust = a_camera->viewFrustum;
 
-		const NiPoint3 forward{ world.rotate.entry[0][0], world.rotate.entry[0][1], world.rotate.entry[0][2] };
-		const NiPoint3 up{ world.rotate.entry[1][0], world.rotate.entry[1][1], world.rotate.entry[1][2] };
-		const NiPoint3 right{ world.rotate.entry[2][0], world.rotate.entry[2][1], world.rotate.entry[2][2] };
+		const NiPoint3 forward{ world.rotate.entry[0].pt.x, world.rotate.entry[0].pt.y, world.rotate.entry[0].pt.z };
+		const NiPoint3 up{ world.rotate.entry[1].pt.x, world.rotate.entry[1].pt.y, world.rotate.entry[1].pt.z };
+		const NiPoint3 right{ world.rotate.entry[2].pt.x, world.rotate.entry[2].pt.y, world.rotate.entry[2].pt.z };
 		const NiPoint3& camPos = world.translate;
 
 		auto cross = [](const NiPoint3& a, const NiPoint3& b) {
