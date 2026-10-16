@@ -176,20 +176,17 @@ Write-Host ''
 # (a) NiFLoader.cpp: QShaderProperty() does not exist on powerof3's BSTriShape.
 #     Its result only feeds ProcessBSEffectShaderProperty(), which is an empty
 #     placeholder, so nullptr changes nothing.
-# (b) NiFLoader.cpp: stream->topObjects[0] -- powerof3's NiTLargeArray has no
-#     accessors at all; use build_shim::LargeArrayAt instead.
+# (b) NOTE: stream->topObjects[0] needs NO rewrite any more. The build shim now
+#     provides BSStream as a self-contained class whose topObjects is a plain
+#     std::vector, so the original subscript expression compiles as-is.
 $nif = Join-Path $src 'NiFLoader.cpp'
 $nf = Get-Content $nif -Raw
 $nf2 = $nf.Replace(
     'NiShadeProperty* shadeProperty = triShape->QShaderProperty();',
     'NiShadeProperty* shadeProperty = nullptr;  // build shim: QShaderProperty() unavailable in powerof3')
 if ($nf2 -eq $nf) { throw 'NiFLoader.cpp: QShaderProperty pattern not found' }
-$nf3 = $nf2.Replace(
-    'stream->topObjects[0].get()',
-    'RE::build_shim::LargeArrayAt(stream->topObjects, 0).get()')
-if ($nf3 -eq $nf2) { throw 'NiFLoader.cpp: topObjects pattern not found' }
-Set-Content $nif -Value $nf3 -NoNewline -Encoding utf8
-Write-Host '  [8/9] NiFLoader.cpp (QShaderProperty, topObjects)'
+Set-Content $nif -Value $nf2 -NoNewline -Encoding utf8
+Write-Host '  [8/9] NiFLoader.cpp (QShaderProperty)'
 
 # SettingsPanel.cpp: imgui 1.92 removed the ImGuiKey_Mod* spellings.
 $set = Join-Path $src 'UI/Panels/SettingsPanel.cpp'

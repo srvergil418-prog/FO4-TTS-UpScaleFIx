@@ -15,6 +15,7 @@
 #include <RE/NetImmerse/NiFrustum.hpp>
 #include <RE/NetImmerse/NiCamera.h>
 #include <RE/NetImmerse/NiStream.h>
+#include <RE/NetImmerse/NiObject.h>
 #include <RE/NetImmerse/NiShadeProperty.h>
 #include <RE/NetImmerse/NiTLargeArray.h>
 #include <RE/Bethesda/BSGeometry.h>
@@ -88,13 +89,37 @@ namespace RE
 
 	// ------------------------------------------------------------------------
 	// BSStream
-	// powerof3 calls this class NiStream. TTS uses the newer name and also calls
-	// the static factory BSStream::Create(), which NiStream lacks.
+	// powerof3 calls this class NiStream, and TTS uses the newer name plus a
+	// static factory BSStream::Create() that NiStream lacks.
+	//
+	// IMPORTANT: this deliberately does NOT derive from RE::NiStream.
+	// NiStream's three engine entry points (the virtual destructor, Load, and
+	// the NiTMapBase/NiTLargeArray instantiations it contains) are declared in
+	// the header but IMPLEMENTED IN THE GAME -- powerof3 never compiles a
+	// NiStream.cpp, so CommonLibF4.lib exports none of them. Deriving from it
+	// therefore produces:
+	//     LNK2001: unresolved external symbol RE::NiStream::~NiStream(void)
+	//     LNK2001: unresolved external symbol RE::NiStream::Load(char const*)
+	//     LNK2001: unresolved external symbol RE::NiTLargeArray<...>::~NiTLargeArray(void)
+	// (plus the NiTPointerMap / NiTMapBase ones) and the virtual destructor also
+	// needs the engine vtable, which cannot be synthesised.
+	//
+	// So this is a self-contained stand-in: Load() reports failure, which makes
+	// NIFLoader::LoadNIF return nullptr. That disables the custom-scope-model
+	// feature (unrelated to the upscaling fix) instead of failing to link.
 	// ------------------------------------------------------------------------
-	class BSStream : public NiStream
+	class BSStream
 	{
 	public:
 		static BSStream* Create() { return new BSStream(); }
+
+		// The engine loader is unavailable. Reporting failure is the honest
+		// option: callers log an error and bail out cleanly.
+		bool Load(const char*) { return false; }
+
+		// NIFLoader reads topObjects[0] after a successful Load() only, but the
+		// expression still has to compile, so provide a benign container.
+		std::vector<NiPointer<NiObject>> topObjects;
 	};
 }
 
