@@ -508,7 +508,7 @@ namespace ThroughScope
 		// It reads trishape->numTriangles / numVertices through a pointer that came
 		// in as BSGraphics::TriShape*, so a bad cast or a wrong shim offset would
 		// fault right here. Capped so the log stays readable.
-		static std::uint32_t s_dtTraceBudget = 200;
+		static std::uint32_t s_dtTraceBudget = 8;   // small: 200 lines drowned the useful signal
 		const bool traceThis = (s_dtTraceBudget > 0);
 		if (traceThis) { --s_dtTraceBudget; TTS_TRACE("DT-TRACE: A enter hkDrawTriShape"); }
 
