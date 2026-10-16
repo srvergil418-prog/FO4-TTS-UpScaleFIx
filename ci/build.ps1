@@ -348,19 +348,11 @@ if ($sp5 -eq $sp) { throw 'SecondPassRenderer: restore SetPosAdjust not found' }
 Set-Content $spr2 -Value $sp5 -NoNewline -Encoding utf8
 Write-Host '  [15/15] SecondPassRenderer.cpp restore-PosAdjust -> no-op'
 
-# The backup side also calls Renderer::GetSingleton().SetPosAdjust(...); it sits
-# inside the contextPtr block where `context` IS in scope, so it can write
-# through the Context instead.
-$sp6 = $sp5.Replace(
-    'RE::BSGraphics::Renderer::GetSingleton().SetPosAdjust(&scopePosAdjust);',
-    "// build shim: Renderer::GetSingleton() is absent from powerof3; write`r`n" +
-    "				// through the Context we already hold two lines above.`r`n" +
-    "				context->shadowState.PosAdjust = scopePosAdjust;")
-if ($sp6 -eq $sp5) { throw 'SecondPassRenderer: set PosAdjust not found' }
-Set-Content $spr2 -Value $sp6 -NoNewline -Encoding utf8
-Write-Host '  [15/15] SecondPassRenderer.cpp set-PosAdjust via Context'
-Write-Host ''
+# NOTE: the "set" side of PosAdjust is handled by the Renderer::GetSingleton
+# replacement in step 11(c). Do NOT handle it again here -- an earlier version of
+# this script did, and it failed because 11(c) had already rewritten the call.
 
+Write-Host ''
 Write-Host '=== all patches applied ==='
 
 # ================================================================ 10) configure + build
