@@ -2,6 +2,7 @@
 #include "DataPersistence.h"
 #include "GlobalTypes.h"
 #include "HookManager.h"
+#include "TTSTrace.h"   // always-flushed trace for crash triage
 #include "RenderUtilities.h"
 #include "ScopeCamera.h"
 #include "Utilities.h"
@@ -500,15 +501,31 @@ namespace ThroughScope
 
 	void hkDrawTriShape(BSGraphics::Renderer* thisPtr, BSGraphics::TriShape* apTriShape, unsigned int auiStartIndex, unsigned int auiNumTriangles)
 	{
+		// DT-TRACE: Buffout pins the ADS/weapon-switch crash at
+		// TrueThroughScope.dll+0014169, called from TTS+00261AB which the game
+		// reaches through DrawTriShape (REL::ID 763320). hkDrawIndexed has already
+		// been ruled out by its own trace, so this hook is the remaining candidate.
+		// It reads trishape->numTriangles / numVertices through a pointer that came
+		// in as BSGraphics::TriShape*, so a bad cast or a wrong shim offset would
+		// fault right here. Capped so the log stays readable.
+		static std::uint32_t s_dtTraceBudget = 200;
+		const bool traceThis = (s_dtTraceBudget > 0);
+		if (traceThis) { --s_dtTraceBudget; TTS_TRACE("DT-TRACE: A enter hkDrawTriShape"); }
+
 		D3DPERF_BeginEvent(0xffffffff, L"DrawTriShape");
 		auto trishape = reinterpret_cast<BSTriShape*>(apTriShape);
 
+		if (traceThis) { TTS_TRACE("DT-TRACE: B before field reads"); }
 		if (trishape->numTriangles == 32 && trishape->numVertices == 33) {
+			if (traceThis) { TTS_TRACE("DT-TRACE: C skipped (33 verts / 32 tris)"); }
 			D3DPERF_EndEvent();
 			return;
 		}
+		if (traceThis) { TTS_TRACE("DT-TRACE: D before original DrawTriShape"); }
 
 		g_hookMgr->g_DrawTriShape(thisPtr, apTriShape, auiStartIndex, auiNumTriangles);
+
+		if (traceThis) { TTS_TRACE("DT-TRACE: E after original DrawTriShape"); }
 		D3DPERF_EndEvent();
 	}
 
