@@ -58,7 +58,10 @@ static void TTS_TraceWrite(const char* a_msg)
             return;
         }
         // 2) CRT -- different API path, may bypass a Win32-only hook
+#pragma warning(push)
+#pragma warning(disable : 4996)   // fopen: SDL deprecation warning, deliberate here
         FILE* f = fopen(kPaths[i], "ab");
+#pragma warning(pop)
         if (f) {
             fwrite(a_msg, 1, strlen(a_msg), f);
             fwrite("\r\n", 1, 2, f);
