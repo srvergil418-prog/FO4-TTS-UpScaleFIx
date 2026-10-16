@@ -481,6 +481,16 @@ namespace ThroughScope {
 			if (traceThis) { TTS_TRACE("DI-TRACE: E before RSGetViewports"); }
 			pContext->RSGetViewports(&vpCount, &s_ScopeQuadOriginalViewport);
 			s_HasScopeQuadViewport = (vpCount > 0);
+			if (traceThis) {
+				char vpBuf[220];
+				sprintf_s(vpBuf,
+				          "DI-TRACE: V captured viewport  TL=(%.1f,%.1f)  WH=(%.1fx%.1f)  depth=(%.2f..%.2f)  vpCount=%u",
+				          s_ScopeQuadOriginalViewport.TopLeftX, s_ScopeQuadOriginalViewport.TopLeftY,
+				          s_ScopeQuadOriginalViewport.Width, s_ScopeQuadOriginalViewport.Height,
+				          s_ScopeQuadOriginalViewport.MinDepth, s_ScopeQuadOriginalViewport.MaxDepth,
+				          (unsigned)vpCount);
+				TTS_TRACE(vpBuf);
+			}
 			if (traceThis) { TTS_TRACE("DI-TRACE: F after RSGetViewports"); }
 			
 			D3DPERF_EndEvent();
@@ -1190,6 +1200,21 @@ namespace ThroughScope {
 				// D3D11 的 viewport 变换会自动处理坐标映射
 				if (s_HasScopeQuadViewport) {
 					pContext->RSSetViewports(1, &s_ScopeQuadOriginalViewport);
+				}
+				{
+					// What the scope quad is actually being drawn with. If the scope
+					// picture lands in a corner of the screen instead of inside the
+					// lens, the viewport here is the first thing to check.
+					char stBuf[260];
+					sprintf_s(stBuf,
+					          "ST-TRACE: draw with vp TL=(%.1f,%.1f) WH=(%.1fx%.1f) hasVp=%d | oldVp TL=(%.1f,%.1f) WH=(%.1fx%.1f) count=%u",
+					          s_ScopeQuadOriginalViewport.TopLeftX, s_ScopeQuadOriginalViewport.TopLeftY,
+					          s_ScopeQuadOriginalViewport.Width, s_ScopeQuadOriginalViewport.Height,
+					          (int)s_HasScopeQuadViewport,
+					          oldViewports[0].TopLeftX, oldViewports[0].TopLeftY,
+					          oldViewports[0].Width, oldViewports[0].Height,
+					          (unsigned)numViewports);
+					TTS_TRACE(stBuf);
 				}
 				
 				// 绑定 RT4 + 支持 stencil 的 DSV
