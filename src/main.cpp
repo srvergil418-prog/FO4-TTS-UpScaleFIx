@@ -1,3 +1,4 @@
+
 #include "Constants.h"
 #include "D3DHooks.h"
 #include "GlobalTypes.h"
@@ -25,13 +26,40 @@
 #include "rendering/RenderTargetMerger.h"
 #include "rendering/ScopeCulling.h"
 #include "ENBIntegration.h"
+// ==================== TTS_TRACE_MARKER ====================
+// Earliest-possible diagnostic trace: depends on nothing but Win32.
+// Used to find where static initialisation dies (fault offset 0x0).
+#define TTS_TRACE(p) \
+    do { \
+        HANDLE _h = CreateFileA(p, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, \
+                                NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL); \
+        if (_h != INVALID_HANDLE_VALUE) { \
+            SetFilePointer(_h, 0, NULL, FILE_END); \
+            const char* _m = p "\r\n"; \
+            DWORD _w = 0; \
+            WriteFile(_h, _m, (DWORD)strlen(_m), &_w, NULL); \
+            CloseHandle(_h); \
+        } \
+    } while (0)
+
+#define TTS_TRACE_FILE "D:\\dsh\\bld\\tts-trace.log"
+
+extern "C" BOOL WINAPI DllMain(HINSTANCE, DWORD reason, LPVOID)
+{
+    if (reason == DLL_PROCESS_ATTACH) {
+        TTS_TRACE(TTS_TRACE_FILE "DllMain PROCESS_ATTACH");
+    }
+    return TRUE;
+}
+// ================== end TTS_TRACE_MARKER ==================
+
 
 using namespace RE;
 using namespace RE::BSGraphics;
 
 #pragma region Pointer
-// 本地REL指针（不在GlobalTypes.h中）
-// ptr_DrawWorld1stPerson 已移至 ThroughScope 命名空间（见下方定义）
+// RELGlobalTypes.h
+// ptr_DrawWorld1stPerson  ThroughScope 
 REL::Relocation<bool*> ptr_DrawWorld_b1stPersonEnable{ REL::ID(922366) };
 REL::Relocation<bool*> ptr_DrawWorld_b1stPersonInWorld{ REL::ID(34473) };
 REL::Relocation<BSCullingGroup**> ptr_k1stPersonCullingGroup{ REL::ID(731482) };
@@ -51,32 +79,32 @@ static REL::Relocation<uint32_t*> AlphaTestMergeInstancedZPrePassDrawDataCount{ 
 
 static REL::Relocation<BSShaderManagerState**> BSM_ST{ REL::ID(1327069) };
 
-// LightStateBackup定义已移动到GlobalTypes.h
+// LightStateBackupGlobalTypes.h
 std::vector<ThroughScope::LightStateBackup> ThroughScope::g_LightStateBackups;
 
 #pragma endregion
 
-// 全局变量定义（在GlobalTypes.h中声明）
+// GlobalTypes.h
 uint64_t ThroughScope::savedDrawWorld = 0;
 RE::PlayerCharacter* ThroughScope::g_pchar = nullptr;
-// isScopCamReady 和 isRenderReady 已移至 RenderStateManager
+// isScopCamReady  isRenderReady  RenderStateManager
 ThroughScope::D3DHooks* ThroughScope::d3dHooks = nullptr;
 NIFLoader* ThroughScope::nifloader = nullptr;
 HMODULE ThroughScope::upscalerModular = nullptr;
 RE::NiCamera* ThroughScope::ggg_ScopeCamera = nullptr;
 
-// 保存瞄具渲染时正确的 ViewProjMat（在 SetCameraData 后保存）
+//  ViewProjMat SetCameraData 
 __m128 ThroughScope::g_ScopeViewProjMat[4] = {};
 bool ThroughScope::g_ScopeViewProjMatValid = false;
 
-// 保存上一帧的 Scope ViewProjMat，用于 Motion Vector 计算
+//  Scope ViewProjMat Motion Vector 
 __m128 ThroughScope::g_ScopePreviousViewProjMat[4] = {};
 bool ThroughScope::g_ScopePreviousViewProjMatValid = false;
 
-// 保存主相机的 FOV，在第一次渲染时从 PlayerCamera->firstPersonFOV 获取
-float ThroughScope::g_MainCameraFOV = 70.0f;  // 默认值
+//  FOV PlayerCamera->firstPersonFOV 
+float ThroughScope::g_MainCameraFOV = 70.0f;  // 
 
-// REL指针定义（在GlobalTypes.h中声明）
+// RELGlobalTypes.h
 REL::Relocation<RE::ShadowSceneNode**> ThroughScope::ptr_DrawWorldShadowNode{ REL::ID(1327069) };
 REL::Relocation<RE::NiCamera**> ThroughScope::ptr_DrawWorldCamera{ REL::ID(1444212) };
 REL::Relocation<RE::NiCamera**> ThroughScope::ptr_DrawWorld1stCamera{ REL::ID(380177) };
@@ -92,7 +120,7 @@ REL::Relocation<uint32_t*> ThroughScope::FPZPrePassDrawDataCount{ REL::ID(163482
 REL::Relocation<uint32_t*> ThroughScope::FPAlphaTestZPrePassDrawDataCount{ REL::ID(382658) };
 REL::Relocation<RE::NiAVObject**> ThroughScope::ptr_DrawWorld1stPerson{ REL::ID(1491228) };
 
-// 渲染状态管理器
+// 
 static ThroughScope::RenderStateManager* g_renderStateMgr = ThroughScope::RenderStateManager::GetSingleton();
 
 static ThroughScope::RendererShadowState* GetRendererShadowState()
@@ -123,13 +151,13 @@ namespace ThroughScope
 
 	//renderTargets[0] = SwapChainImage RenderTarget(Only rtView and srView)
 	//renderTargets[4] = Main Render_PreUI RenderTarget
-	//renderTargets[26] = TAA 历史缓冲 = TAA PS t1
+	//renderTargets[26] = TAA  = TAA PS t1
 	//renderTargets[29] = TAA Motion Vectors = TAA PS t2
-	//renderTargets[24] = TAA Jitter Mask = TAA PS t4 就是那个红不拉几的
-	//renderTargets[15] = 用于调整颜色的 1920 -> 480 的模糊的图像
-	//renderTargets[69] = 1x1 的小像素
+	//renderTargets[24] = TAA Jitter Mask = TAA PS t4 
+	//renderTargets[15] =  1920 -> 480 
+	//renderTargets[69] = 1x1 
 
-	// 瞄具专用渲染标志已移至RenderStateManager
+	// RenderStateManager
 	namespace FirstSpawnDelay
 	{
 		bool delayStarted = false;
@@ -138,7 +166,7 @@ namespace ThroughScope
 		void Reset()
 		{
 			delayStarted = false;
-			// delayStartTime 不需要重置，下次会重新赋值
+			// delayStartTime 
 		}
 	}
 
@@ -149,9 +177,9 @@ namespace ThroughScope
 		ScopeCamera::isFirstScopeRender = true;
 		D3DHooks::ResetParallaxState();
 
-		// 读档后立即恢复ZoomData
+		// ZoomData
 		std::thread([]() {
-			std::this_thread::sleep_for(std::chrono::milliseconds(1000));  // 等待武器完全加载
+			std::this_thread::sleep_for(std::chrono::milliseconds(1000));  // 
 			ScopeCamera::RestoreZoomDataForCurrentWeapon();
 			logger::info("Restored ZoomData after load game");
 		}).detach();
@@ -197,7 +225,7 @@ DWORD WINAPI InitThread(HMODULE hModule)
 	g_renderStateMgr->SetRenderReady(renderReady);
 	ThroughScope::ggg_ScopeCamera = ThroughScope::ScopeCamera::GetScopeCamera();
 	
-	// 从 DataPersistence 加载并应用高级裁剪设置
+	//  DataPersistence 
 	auto dataPersistence = ThroughScope::DataPersistence::GetSingleton();
 	const auto& globalSettings = dataPersistence->GetGlobalSettings();
 	ThroughScope::SetCullingSafetyMargin(globalSettings.cullingSafetyMargin);
@@ -233,6 +261,7 @@ void InitializePlugin()
 // F4SE Query plugin
 F4SE_EXPORT bool F4SEAPI F4SEPlugin_Query(const F4SE::QueryInterface* a_f4se, F4SE::PluginInfo* a_info)
 {
+	TTS_TRACE(TTS_TRACE_FILE "F4SEPlugin_Query ENTER");
 	a_info->infoVersion = F4SE::PluginInfo::kVersion;
 	a_info->name = Version::PROJECT.data();
 	a_info->version = Version::MAJOR;
@@ -285,6 +314,7 @@ F4SE_EXPORT bool F4SEAPI F4SEPlugin_Query(const F4SE::QueryInterface* a_f4se, F4
 // F4SE Load plugin
 F4SE_EXPORT bool F4SEAPI F4SEPlugin_Load(const F4SE::LoadInterface* a_f4se)
 {
+	TTS_TRACE(TTS_TRACE_FILE "F4SEPlugin_Load ENTER");
 	//SetConsoleOutputCP(CP_UTF8);
 	//SetConsoleCP(CP_UTF8);
 
@@ -297,7 +327,7 @@ F4SE_EXPORT bool F4SEAPI F4SEPlugin_Load(const F4SE::LoadInterface* a_f4se)
 #endif
 
 	auto mhInit = MH_Initialize();
-	// 初始化MinHook
+	// MinHook
 	if (mhInit != MH_OK) {
 		logger::info("MH_Initialize Not Ok, Reason: {}", (int)mhInit);
 	}
@@ -327,7 +357,7 @@ F4SE_EXPORT bool F4SEAPI F4SEPlugin_Load(const F4SE::LoadInterface* a_f4se)
 			ThroughScope::d3dHooks->Initialize();
 			InitializePlugin();
 
-			// 激光调试模式（已修复，默认关闭）
+			// 
 			// ThroughScope::SetLaserInvestigationMode(true);
 		} else if (msg->type == F4SE::MessagingInterface::kPostLoadGame) {
 			logger::info("TrueThroughScope: Load a save, reset scope status");
