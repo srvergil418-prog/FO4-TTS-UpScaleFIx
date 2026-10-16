@@ -246,7 +246,10 @@ namespace ThroughScope
 
 			// 设置节点名称，确保与渲染流程中的查找一致
 			loadedNode->name = "TTSNode";
-			ScopeCamera::s_CurrentScopeNode = loadedNode;
+			// Publish through ScopeCamera so the swap is atomic w.r.t. the render
+			// thread and the previous node's reference is released (see
+			// ScopeCamera::PublishScopeNode for why a bare assignment breaks).
+			ScopeCamera::PublishScopeNode(loadedNode);
 
 			// 设置变换
 			loadedNode->local.translate = RE::NiPoint3(0, 0, 7);
