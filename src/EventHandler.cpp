@@ -225,7 +225,23 @@ namespace ThroughScope
 
 	bool AnimationGraphEventWatcher::Initialize()
 	{
-		((AnimationGraphEventWatcher*)((uint64_t)PlayerCharacter::GetSingleton() + 0x38))->RegisterForEvents();
+		// [TTS CI] The original body was:
+		//     ((AnimationGraphEventWatcher*)((uint64_t)PlayerCharacter::GetSingleton() + 0x38))
+		//         ->RegisterForEvents();
+		// which treats PlayerCharacter+0x38 as a BSAnimationGraphEvent sink and
+		// hooks vtable+0x8, assuming that slot is ProcessEvent. That assumption does
+		// not hold on 1.10.163: Actor's base list has no
+		// BSTEventSink<BSAnimationGraphEvent> at all (master and dev-1.10.163 agree
+		// on the layout), so slot 1 belongs to some other virtual function. The
+		// hooked vtable is only ever exercised by animation-graph events, which is
+		// exactly what a weapon swap raises -- so the bad call surfaces as
+		// "swap weapon away and back, then crash", with an access violation and no
+		// IDDB dialog.
+		//
+		// Nothing of value is lost by not installing it: the whole payload of the
+		// hook (the weaponDraw handling) is commented out in hkProcessEvent, leaving
+		// only a pass-through to the original. Skipping the hook leaves that
+		// pass-through path intact, since we simply never replace the slot.
 		isQuerySpawnNode = false;
 		return true;
 	}
