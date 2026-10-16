@@ -301,14 +301,23 @@ if ((Test-Path (Join-Path $clf4 ".git")) -and (Test-Path $clf4Inc)) {
         }
         return $m.Value
     }
-    $rxDead = [regex]::new('(?m)^[ \t]*((?:inline[ \t]+static[ \t]+)?REL::Relocation\s*<[^\r\n]*?REL::ID\(\s*(\d+)\s*\)[^\r\n]*)')
+    $rxDead = [regex]::new('(?m)^[ \t]*((?:inline[ \t]+static[ \t]+|static[ \t]+inline[ \t]+)REL::Relocation\s*<[^\r\n]*?REL::ID\(\s*(\d+)\s*\)[^\r\n]*)')
     foreach ($f in $allHeaders) {
         $before = [System.IO.File]::ReadAllText($f.FullName)
         if ($before -notmatch "REL::Relocation") { continue }
         $after = $rxDead.Replace($before, $deadEval)
         if ($after -ne $before) { [System.IO.File]::WriteAllText($f.FullName, $after) }
     }
-    Write-Host ("  disabled " + $script:deadDisabled + " REL::Relocation members whose IDs do not exist in 1.10.163") -ForegroundColor Yellow
+    # NOTE: the regex deliberately requires "inline". A class-scope
+    #     inline static REL::Relocation<...> x{ REL::ID(N) };
+    # is initialised by the CRT at DLL load, so an unknown N is fatal before
+    # DllMain. A function-local
+    #     static REL::Relocation<...> func{ REL::ID(N) };
+    # only resolves when that line is first executed, so leaving it alone is
+    # safe as long as TTS never calls that function -- and commenting it out
+    # would turn a harmless entry into a hard compile error. Measured split on
+    # the current master tree: 1 class-scope vs 129 function-local.
+    Write-Host ("  disabled " + $script:deadDisabled + " class-scope inline static REL::Relocation members whose IDs do not exist in 1.10.163") -ForegroundColor Yellow
     if (-not (Test-Path $iseHdr)) { throw "ImageSpaceEffect.h disappeared after the overlay" }
 
     $idsAfter = Get-RelIds $iseHdr
