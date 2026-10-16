@@ -834,7 +834,7 @@ namespace ThroughScope
 			return;
 		}
 
-		// 从 TLS 获取 BSGraphics::Context
+		// 从 TLS 获取 BSGraphics::TTSContextPlaceholder
 		_TEB* teb = NtCurrentTeb();
 		auto tls_index = *ptr_tls_index_sky;
 		uintptr_t contextPtr = *(uintptr_t*)(*((uint64_t*)teb->Reserved1[11] + tls_index) + 2848i64);
@@ -848,7 +848,7 @@ namespace ThroughScope
 			return;
 		}
 
-		auto context = (RE::BSGraphics::Context*)contextPtr;
+		auto context = (RE::BSGraphics::TTSContextPlaceholder*)contextPtr;
 		auto& cameraData = context->shadowState.CameraData;
 
 		// 备份当前的投影矩阵（这是被主相机覆盖的错误矩阵）
