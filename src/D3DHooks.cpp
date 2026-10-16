@@ -1369,6 +1369,20 @@ namespace ThroughScope {
 							vp.TopLeftX > static_cast<float>(desc.Width) * 0.1f ||
 							vp.TopLeftY > static_cast<float>(desc.Height) * 0.1f;
 
+						{
+							// The scope picture landing in one corner means the quad was
+							// drawn with a viewport that does not match the bound render
+							// target. Log the two sets of numbers the decision is made
+							// from, so we can tell "correctly corrected" from "wrongly
+							// corrected".
+							char vpBuf2[300];
+							sprintf_s(vpBuf2,
+							          "VP-TRACE: scopeRender=1 incoming TL=(%.1f,%.1f) WH=(%.1fx%.1f) | RT WH=(%ux%u) | needsCorrection=%d",
+							          vp.TopLeftX, vp.TopLeftY, vp.Width, vp.Height,
+							          desc.Width, desc.Height, (int)needsCorrection);
+							TTS_TRACE(vpBuf2);
+						}
+
 						if (needsCorrection) {
 							D3D11_VIEWPORT targetViewport{};
 							targetViewport.TopLeftX = 0.0f;
