@@ -1,6 +1,7 @@
 #include "D3DHooks.h"
 #include "Utilities.h"
 #include "GlobalTypes.h"
+#include "TTSTrace.h"   // always-flushed trace: crash logs only give DLL+<rva>
 #include <detours.h>
 #include <imgui.h>
 #include <imgui_impl_dx11.h>
@@ -448,15 +449,26 @@ namespace ThroughScope {
 
     void WINAPI D3DHooks::hkDrawIndexed(ID3D11DeviceContext* pContext, UINT IndexCount, UINT StartIndexLocation, INT BaseVertexLocation)
 	{
+		// DI-TRACE: Buffout attributes the ADS crash to TrueThroughScope.dll+0014169,
+		// reached from the DrawTriShape/DrawIndexed hook. hkDrawIndexed fires for
+		// every draw call in the frame (thousands), so tracing is gated on the
+		// scope-quad branch only and capped, otherwise the log is useless within
+		// one frame.
 		if (isSelfDrawCall)
 			return phookD3D11DrawIndexed(pContext, IndexCount, StartIndexLocation, BaseVertexLocation);
 
 		bool isScopeQuad = IsScopeQuadBeingDrawn(pContext, IndexCount);
 
 		if (isScopeQuad) {
+			static std::uint32_t s_diTraceBudget = 60;
+			const bool traceThis = (s_diTraceBudget > 0);
+			if (traceThis) { --s_diTraceBudget; TTS_TRACE("DI-TRACE: B scope quad detected"); }
+
 			D3DPERF_BeginEvent(0xFFFF00FF, L"TTS_ScopeQuad_Detected");
 
+			if (traceThis) { TTS_TRACE("DI-TRACE: C before CacheAllStates"); }
 			CacheAllStates();
+			if (traceThis) { TTS_TRACE("DI-TRACE: D after CacheAllStates"); }
 			
 			// 保存索引数量用于后续 SetScopeTexture 绘制
 			s_ScopeQuadIndexCount = IndexCount;
@@ -466,8 +478,10 @@ namespace ThroughScope {
 			// 保存当前 viewport (Upscaling 兼容)
 			// 顶点坐标是基于这个 viewport 计算的，渲染到 RT4 时需要使用相同的 viewport
 			UINT vpCount = 1;
+			if (traceThis) { TTS_TRACE("DI-TRACE: E before RSGetViewports"); }
 			pContext->RSGetViewports(&vpCount, &s_ScopeQuadOriginalViewport);
 			s_HasScopeQuadViewport = (vpCount > 0);
+			if (traceThis) { TTS_TRACE("DI-TRACE: F after RSGetViewports"); }
 			
 			D3DPERF_EndEvent();
 			
