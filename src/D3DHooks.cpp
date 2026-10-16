@@ -1457,7 +1457,20 @@ namespace ThroughScope {
 							TTS_TRACE(vpBuf2);
 						}
 
-						if (needsCorrection) {
+						// NOTE: this used to rewrite the incoming viewport to the bound
+						// render target's full size whenever it looked "too small".
+						// That is exactly what an upscaler does on purpose: render the
+						// scene into a smaller internal viewport and stretch it at
+						// present time. Overriding it makes the scope picture land in a
+						// corner AND breaks the renderer's own assumptions, which is a
+						// plausible source of the later memory corruption.
+						//
+						// So: observe only, never override. The game knows which
+						// viewport it is drawing with; we do not have enough information
+						// to overrule it. Set TTS_VIEWPORT_OVERRIDE to 1 to restore the
+						// old behaviour when comparing.
+						constexpr bool kOverrideViewport = false;
+						if (needsCorrection && kOverrideViewport) {
 							D3D11_VIEWPORT targetViewport{};
 							targetViewport.TopLeftX = 0.0f;
 							targetViewport.TopLeftY = 0.0f;
