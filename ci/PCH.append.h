@@ -290,49 +290,6 @@ namespace RE
 }
 
 // ---------------------------------------------------------------------------
-// Rotation matrix access compatibility
-// CommonLibF4 revisions/shims may expose the matrix rows as entry[] or through
-// NiMatrix3::operator[], and a row's xyz values may be direct fields, row.pt
-// fields, or elements of row.pt[4]. Select the available shape at compile time.
-// ---------------------------------------------------------------------------
-namespace RE::build_shim
-{
-	template <class T>
-	[[nodiscard]] inline decltype(auto) MatrixRow(const T& a_matrix, std::size_t a_index) noexcept
-	{
-		if constexpr (requires { a_matrix.entry[0]; }) {
-			return (a_matrix.entry[a_index]);
-		} else {
-			return (a_matrix[a_index]);
-		}
-	}
-
-	template <class T>
-	[[nodiscard]] inline float MatrixRowComponent(const T& a_row, std::size_t a_index) noexcept
-	{
-		if constexpr (requires { a_row.pt[0]; }) {
-			return a_row.pt[a_index];
-		} else if constexpr (requires { a_row.pt.x; a_row.pt.y; a_row.pt.z; }) {
-			switch (a_index) {
-			case 0: return a_row.pt.x;
-			case 1: return a_row.pt.y;
-			case 2: return a_row.pt.z;
-			default: return 0.0F;
-			}
-		} else if constexpr (requires { a_row.x; a_row.y; a_row.z; }) {
-			switch (a_index) {
-			case 0: return a_row.x;
-			case 1: return a_row.y;
-			case 2: return a_row.z;
-			default: return 0.0F;
-			}
-		} else {
-			static_assert(sizeof(T) == 0, "Unsupported rotation-matrix row layout");
-		}
-	}
-}
-
-// ---------------------------------------------------------------------------
 // NiFrustumPlanes::Set(const NiCamera*)
 // powerof3 has no such type at all, so the engine implementation is
 // unavailable. This deliberately does NOT call the author's RELID 1361032:
@@ -352,24 +309,9 @@ namespace RE
 		const auto& world = a_camera->world;
 		const auto& frust = a_camera->viewFrustum;
 
-		const auto& row0 = build_shim::MatrixRow(world.rotate, 0);
-		const auto& row1 = build_shim::MatrixRow(world.rotate, 1);
-		const auto& row2 = build_shim::MatrixRow(world.rotate, 2);
-		const NiPoint3 forward{
-			build_shim::MatrixRowComponent(row0, 0),
-			build_shim::MatrixRowComponent(row0, 1),
-			build_shim::MatrixRowComponent(row0, 2)
-		};
-		const NiPoint3 up{
-			build_shim::MatrixRowComponent(row1, 0),
-			build_shim::MatrixRowComponent(row1, 1),
-			build_shim::MatrixRowComponent(row1, 2)
-		};
-		const NiPoint3 right{
-			build_shim::MatrixRowComponent(row2, 0),
-			build_shim::MatrixRowComponent(row2, 1),
-			build_shim::MatrixRowComponent(row2, 2)
-		};
+		const NiPoint3 forward{ world.rotate.entry[0].pt[0], world.rotate.entry[0].pt[1], world.rotate.entry[0].pt[2] };
+		const NiPoint3 up{ world.rotate.entry[1].pt[0], world.rotate.entry[1].pt[1], world.rotate.entry[1].pt[2] };
+		const NiPoint3 right{ world.rotate.entry[2].pt[0], world.rotate.entry[2].pt[1], world.rotate.entry[2].pt[2] };
 		const NiPoint3& camPos = world.translate;
 
 		auto cross = [](const NiPoint3& a, const NiPoint3& b) {
