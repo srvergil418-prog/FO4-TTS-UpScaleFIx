@@ -28,51 +28,10 @@
 #include "rendering/ScopeCulling.h"
 #include "ENBIntegration.h"
 // ==================== TTS_TRACE_MARKER ====================
-// Earliest-possible diagnostic trace. Depends on nothing but Win32/CRT --
-// no spdlog, no F4SE, no TTS component -- so it survives to run even if
-// static initialisation is what is killing us.
-//
-// Writes to several candidate paths because MO2's USVFS may intercept file
-// creation, and uses BOTH the Win32 API and the CRT so that whichever path
-// is hooked, the other may still get through.
-#define TTS_TRACE_CANDIDATES \
-    "E:\\Custom Fallout4\\tts-trace.log", \
-    "E:\\tts-trace.log", \
-    "D:\\dsh\\bld\\tts-trace.log", \
-    "C:\\Users\\SRVERGIL\\tts-trace.log"
-
-static void TTS_TraceWrite(const char* a_msg)
-{
-    static const char* kPaths[] = { TTS_TRACE_CANDIDATES };
-
-    for (int i = 0; i < 4; ++i) {
-        // 1) Win32
-        HANDLE h = CreateFileA(kPaths[i], GENERIC_WRITE,
-                               FILE_SHARE_READ | FILE_SHARE_WRITE,
-                               NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-        if (h != INVALID_HANDLE_VALUE) {
-            SetFilePointer(h, 0, NULL, FILE_END);
-            DWORD w = 0;
-            WriteFile(h, a_msg, (DWORD)strlen(a_msg), &w, NULL);
-            WriteFile(h, "\r\n", 2, &w, NULL);
-            CloseHandle(h);
-            return;
-        }
-        // 2) CRT -- different API path, may bypass a Win32-only hook
-#pragma warning(push)
-#pragma warning(disable : 4996)   // fopen: SDL deprecation warning, deliberate here
-        FILE* f = fopen(kPaths[i], "ab");
-#pragma warning(pop)
-        if (f) {
-            fwrite(a_msg, 1, strlen(a_msg), f);
-            fwrite("\r\n", 1, 2, f);
-            fclose(f);
-            return;
-        }
-    }
-}
-
-#define TTS_TRACE(msg) TTS_TraceWrite(msg)
+// The trace helper itself now lives in TTSTrace.h so D3DHooks.cpp can use it too
+// (crash logs only give us "TrueThroughScope.dll+<rva>", so the render hooks need
+// the same always-flushed channel as the loader).
+#include "TTSTrace.h"
 
 extern "C" BOOL WINAPI DllMain(HINSTANCE, DWORD reason, LPVOID)
 {
