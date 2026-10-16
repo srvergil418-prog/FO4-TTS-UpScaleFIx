@@ -168,7 +168,7 @@ Write-Host ""
 $hv = Join-Path $commonlibf4 'CommonLibF4/include/RE/Havok/hkVector4.h'
 $t = Get-Content $hv -Raw
 $t2 = $t.Replace('hkVector4f& GetNormalized()', 'hkVector4f GetNormalized()')
-if ($t2 -eq $t) { throw 'hkVector4.h: pattern not found' }
+if ($t2 -eq $t) { Write-Host '  [1/9] hkVector4.h: pattern not found -- skipping' -ForegroundColor Yellow }
 Set-Content $hv -Value $t2 -NoNewline -Encoding utf8
 Write-Host '  [1/9] hkVector4.h'
 
@@ -178,36 +178,53 @@ $a = Get-Content $api -Raw
 $a2 = $a.Replace(
     'log::info("{} v{}", GetPluginName(), GetPluginVersion());',
     'log::info("{} v{}", GetPluginName(), GetPluginVersion().string());')
-if ($a2 -eq $a) { throw 'API.cpp: pattern not found' }
+if ($a2 -eq $a) { Write-Host '  [2/9] API.cpp: pattern not found -- skipping' -ForegroundColor Yellow }
 Set-Content $api -Value $a2 -NoNewline -Encoding utf8
 Write-Host '  [2/9] API.cpp'
 
 # ================================================================ 3) REX/LOG.cpp
-$lg = Join-Path $commonlibf4 'CommonLibF4/src/REX/REX/LOG.cpp'
+#
+# The wide-char LOG overload must be converted to UTF-8 before reaching spdlog.
+# This was needed against master; whether dev-1.10.163 still has the overload is
+# not guaranteed, so every step here is BEST-EFFORT: if the pattern is absent we
+# warn and move on instead of aborting the build.
+$lg = Join-Path $commonlibf4 "CommonLibF4/src/REX/REX/LOG.cpp"
 $g = Get-Content $lg -Raw
-if ($g -notmatch 'REX/REX/CONVERT\.h') {
-    $g = $g.Replace('#include "REX/W32/USER32.h"',
+if ($g -notmatch "REX/REX/CONVERT\.h") {
+    $g = $g.Replace("#include `"REX/W32/USER32.h`"",
                     "#include `"REX/W32/USER32.h`"`r`n#include `"REX/REX/CONVERT.h`"")
 }
-$rx = [regex]'(?s)void LOG\(const std::source_location a_loc, const LOG_LEVEL a_level, const std::wstring_view a_fmt\)\s*\{.*?\r?\n\t\}'
+$rx = [regex]"(?s)void LOG\(const std::source_location a_loc, const LOG_LEVEL a_level, const std::wstring_view a_fmt\)\s*\{.*?\r?\n\t\}"
 $m = $rx.Match($g)
-if (-not $m.Success) { throw 'REX/LOG.cpp: wide overload not found' }
-$repl = "void LOG(const std::source_location a_loc, const LOG_LEVEL a_level, const std::wstring_view a_fmt)`r`n`t{`r`n`t`t// spdlog accepts narrow chars only; convert UTF-16 -> UTF-8 first`r`n`t`tstd::string narrow;`r`n`t`tif (!REX::UTF16_TO_UTF8(a_fmt, narrow)) {`r`n`t`t`tnarrow = `"<encoding error>`";`r`n`t`t}`r`n`t`tLOG(a_loc, a_level, std::string_view{ narrow });`r`n`t}"
-$g2 = $g.Remove($m.Index, $m.Length).Insert($m.Index, $repl)
-if ($g2 -eq $g) { throw 'REX/LOG.cpp: replacement failed' }
-Set-Content $lg -Value $g2 -NoNewline -Encoding utf8
-Write-Host '  [3/9] REX/REX/LOG.cpp'
+if (-not $m.Success) {
+    Write-Host "  [3/9] REX/LOG.cpp: wide overload not found -- skipping (dev may not need it)" -ForegroundColor Yellow
+} else {
+    $repl = "void LOG(const std::source_location a_loc, const LOG_LEVEL a_level, const std::wstring_view a_fmt)`r`n`t{`r`n`t`t// spdlog accepts narrow chars only; convert UTF-16 -> UTF-8 first`r`n`t`tstd::string narrow;`r`n`t`tif (!REX::UTF16_TO_UTF8(a_fmt, narrow)) {`r`n`t`t`tnarrow = `"<encoding error>`";`r`n`t`t}`r`n`t`tLOG(a_loc, a_level, std::string_view{ narrow });`r`n`t}"
+    $g2 = $g.Remove($m.Index, $m.Length).Insert($m.Index, $repl)
+    if ($g2 -eq $g) {
+        Write-Host "  [3/9] REX/LOG.cpp: replacement had no effect -- skipping" -ForegroundColor Yellow
+    } else {
+        Set-Content $lg -Value $g2 -NoNewline -Encoding utf8
+        Write-Host "  [3/9] REX/LOG.cpp"
+    }
+}
 
 # ================================================================ 4) REL/Module.h
-$mod = Join-Path $commonlibf4 'CommonLibF4/include/REL/Module.h'
+#
+# The author private library exposes IsF4/IsVR; powerof3 master did not. Add them
+# if absent. Best-effort: warn and continue if the class anchor cannot be found.
+$mod = Join-Path $commonlibf4 "CommonLibF4/include/REL/Module.h"
 $mo = Get-Content $mod -Raw
-if ($mo -notmatch 'static bool IsF4') {
-    $mo2 = $mo -replace '(class\s+Module\s*\{)', "`$1`r`n`tpublic:`r`n`t`t// Added by build shim: this build targets the desktop (non-VR) runtime.`r`n`t`t[[nodiscard]] static bool IsF4() { return true; }`r`n`t`t[[nodiscard]] static bool IsVR() { return false; }"
-    if ($mo2 -eq $mo) { throw 'REL/Module.h: could not insert IsF4/IsVR' }
-    Set-Content $mod -Value $mo2 -NoNewline -Encoding utf8
-    Write-Host '  [4/9] REL/Module.h (IsF4/IsVR)'
+if ($mo -match "static bool IsF4") {
+    Write-Host "  [4/9] REL/Module.h already patched"
 } else {
-    Write-Host '  [4/9] REL/Module.h already patched'
+    $mo2 = $mo -replace "(class\s+Module\s*\{)", "`$1`r`n`tpublic:`r`n`t`t// Added by build shim: this build targets the desktop (non-VR) runtime.`r`n`t`t[[nodiscard]] static bool IsF4() { return true; }`r`n`t`t[[nodiscard]] static bool IsVR() { return false; }"
+    if ($mo2 -eq $mo) {
+        Write-Host "  [4/9] REL/Module.h: could not insert IsF4/IsVR -- skipping" -ForegroundColor Yellow
+    } else {
+        Set-Content $mod -Value $mo2 -NoNewline -Encoding utf8
+        Write-Host "  [4/9] REL/Module.h (IsF4/IsVR)"
+    }
 }
 
 # ================================================================ 5) PCH.h NOMINMAX
