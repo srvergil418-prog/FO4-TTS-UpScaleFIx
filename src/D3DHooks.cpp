@@ -2,6 +2,7 @@
 #include "Utilities.h"
 #include "GlobalTypes.h"
 #include "TTSTrace.h"   // always-flushed trace: crash logs only give DLL+<rva>
+#include <cstdio>       // sprintf_s for the viewport diagnostics
 #include <detours.h>
 #include <imgui.h>
 #include <imgui_impl_dx11.h>
