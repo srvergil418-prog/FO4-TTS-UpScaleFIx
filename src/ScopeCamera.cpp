@@ -48,6 +48,22 @@ namespace ThroughScope
 		}
 	}
 
+	void ScopeCamera::PublishScopeNode(RE::NiNode* a_node)
+	{
+		std::lock_guard<std::mutex> lock(ScopeNodeMutex());
+
+		// Release the node we are replacing (the old code just overwrote the
+		// pointer, leaking it and leaving readers pointing at a node nobody owned).
+		if (s_CurrentScopeNode && s_CurrentScopeNode != a_node) {
+			s_CurrentScopeNode->DecRefCount();
+		}
+
+		// Take over the caller's reference. Doing this under the lock means a
+		// render-thread AcquireScopeNode sees either the old node or the new one,
+		// never a half-swapped state.
+		s_CurrentScopeNode = a_node;
+	}
+
 	BGSKeyword* ScopeCamera::an_45 = nullptr;
 	BGSKeyword* ScopeCamera::AnimsXM2010_scopeKH45 = nullptr;
 	BGSKeyword* ScopeCamera::AnimsXM2010_scopeKM = nullptr;
