@@ -267,17 +267,26 @@ if (-not $m.Success) {
 #
 # The author private library exposes IsF4/IsVR; powerof3 master did not. Add them
 # if absent. Best-effort: warn and continue if the class anchor cannot be found.
+#
+# NOTE: the consolidated-header cleanup above deletes REL/Module.h on purpose --
+# dev-1.10.163 folded REL::Module into REL/Relocation.h. So on a dev overlay this
+# file is EXPECTED to be absent and this whole step is a no-op. It still matters
+# if the overlay is ever skipped or the upstream layout changes.
 $mod = Join-Path $commonlibf4 "CommonLibF4/include/REL/Module.h"
-$mo = Get-Content $mod -Raw
-if ($mo -match "static bool IsF4") {
-    Write-Host "  [4/9] REL/Module.h already patched"
+if (-not (Test-Path $mod)) {
+    Write-Host "  [4/9] REL/Module.h absent (removed by the dev overlay) -- skipping" -ForegroundColor Yellow
 } else {
-    $mo2 = $mo -replace "(class\s+Module\s*\{)", "`$1`r`n`tpublic:`r`n`t`t// Added by build shim: this build targets the desktop (non-VR) runtime.`r`n`t`t[[nodiscard]] static bool IsF4() { return true; }`r`n`t`t[[nodiscard]] static bool IsVR() { return false; }"
-    if ($mo2 -eq $mo) {
-        Write-Host "  [4/9] REL/Module.h: could not insert IsF4/IsVR -- skipping" -ForegroundColor Yellow
+    $mo = Get-Content $mod -Raw
+    if ($mo -match "static bool IsF4") {
+        Write-Host "  [4/9] REL/Module.h already patched"
     } else {
-        Set-Content $mod -Value $mo2 -NoNewline -Encoding utf8
-        Write-Host "  [4/9] REL/Module.h (IsF4/IsVR)"
+        $mo2 = $mo -replace "(class\s+Module\s*\{)", "`$1`r`n`tpublic:`r`n`t`t// Added by build shim: this build targets the desktop (non-VR) runtime.`r`n`t`t[[nodiscard]] static bool IsF4() { return true; }`r`n`t`t[[nodiscard]] static bool IsVR() { return false; }"
+        if ($mo2 -eq $mo) {
+            Write-Host "  [4/9] REL/Module.h: could not insert IsF4/IsVR -- skipping" -ForegroundColor Yellow
+        } else {
+            Set-Content $mod -Value $mo2 -NoNewline -Encoding utf8
+            Write-Host "  [4/9] REL/Module.h (IsF4/IsVR)"
+        }
     }
 }
 
