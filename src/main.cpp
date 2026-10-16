@@ -27,33 +27,57 @@
 #include "rendering/ScopeCulling.h"
 #include "ENBIntegration.h"
 // ==================== TTS_TRACE_MARKER ====================
-// Earliest-possible diagnostic trace: depends on nothing but Win32.
-// Used to find where static initialisation dies (fault offset 0x0).
-#define TTS_TRACE(p) \
-    do { \
-        HANDLE _h = CreateFileA(p, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, \
-                                NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL); \
-        if (_h != INVALID_HANDLE_VALUE) { \
-            SetFilePointer(_h, 0, NULL, FILE_END); \
-            const char* _m = p "\r\n"; \
-            DWORD _w = 0; \
-            WriteFile(_h, _m, (DWORD)strlen(_m), &_w, NULL); \
-            CloseHandle(_h); \
-        } \
-    } while (0)
+// Earliest-possible diagnostic trace. Depends on nothing but Win32/CRT --
+// no spdlog, no F4SE, no TTS component -- so it survives to run even if
+// static initialisation is what is killing us.
+//
+// Writes to several candidate paths because MO2's USVFS may intercept file
+// creation, and uses BOTH the Win32 API and the CRT so that whichever path
+// is hooked, the other may still get through.
+#define TTS_TRACE_CANDIDATES \
+    "E:\\Custom Fallout4\\tts-trace.log", \
+    "E:\\tts-trace.log", \
+    "D:\\dsh\\bld\\tts-trace.log", \
+    "C:\\Users\\SRVERGIL\\tts-trace.log"
 
-#define TTS_TRACE_FILE "D:\\dsh\\bld\\tts-trace.log"
+static void TTS_TraceWrite(const char* a_msg)
+{
+    static const char* kPaths[] = { TTS_TRACE_CANDIDATES };
+
+    for (int i = 0; i < 4; ++i) {
+        // 1) Win32
+        HANDLE h = CreateFileA(kPaths[i], GENERIC_WRITE,
+                               FILE_SHARE_READ | FILE_SHARE_WRITE,
+                               NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (h != INVALID_HANDLE_VALUE) {
+            SetFilePointer(h, 0, NULL, FILE_END);
+            DWORD w = 0;
+            WriteFile(h, a_msg, (DWORD)strlen(a_msg), &w, NULL);
+            WriteFile(h, "\r\n", 2, &w, NULL);
+            CloseHandle(h);
+            return;
+        }
+        // 2) CRT -- different API path, may bypass a Win32-only hook
+        FILE* f = fopen(kPaths[i], "ab");
+        if (f) {
+            fwrite(a_msg, 1, strlen(a_msg), f);
+            fwrite("\r\n", 1, 2, f);
+            fclose(f);
+            return;
+        }
+    }
+}
+
+#define TTS_TRACE(msg) TTS_TraceWrite(msg)
 
 extern "C" BOOL WINAPI DllMain(HINSTANCE, DWORD reason, LPVOID)
 {
     if (reason == DLL_PROCESS_ATTACH) {
-        TTS_TRACE(TTS_TRACE_FILE "DllMain PROCESS_ATTACH");
+        TTS_TraceWrite("DllMain PROCESS_ATTACH");
     }
     return TRUE;
 }
 // ================== end TTS_TRACE_MARKER ==================
-
-
 using namespace RE;
 using namespace RE::BSGraphics;
 
@@ -261,7 +285,7 @@ void InitializePlugin()
 // F4SE Query plugin
 F4SE_EXPORT bool F4SEAPI F4SEPlugin_Query(const F4SE::QueryInterface* a_f4se, F4SE::PluginInfo* a_info)
 {
-	TTS_TRACE(TTS_TRACE_FILE "F4SEPlugin_Query ENTER");
+	TTS_TRACE("F4SEPlugin_Query ENTER");
 	a_info->infoVersion = F4SE::PluginInfo::kVersion;
 	a_info->name = Version::PROJECT.data();
 	a_info->version = Version::MAJOR;
@@ -314,7 +338,7 @@ F4SE_EXPORT bool F4SEAPI F4SEPlugin_Query(const F4SE::QueryInterface* a_f4se, F4
 // F4SE Load plugin
 F4SE_EXPORT bool F4SEAPI F4SEPlugin_Load(const F4SE::LoadInterface* a_f4se)
 {
-	TTS_TRACE(TTS_TRACE_FILE "F4SEPlugin_Load ENTER");
+	TTS_TRACE("F4SEPlugin_Load ENTER");
 	//SetConsoleOutputCP(CP_UTF8);
 	//SetConsoleCP(CP_UTF8);
 
