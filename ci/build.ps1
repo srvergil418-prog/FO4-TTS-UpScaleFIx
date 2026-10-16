@@ -89,6 +89,16 @@ Write-Host ''
 #     only in master -> kept as-is    (BSGeometry.h, BSTriShape.h, ...)
 #     only in dev    -> added
 #
+#   The path must be the WHOLE CommonLibF4 tree, not just CommonLibF4/include.
+#   Overlaying include alone produced a header/source mismatch: master-only
+#   REL/Segment.h survived next to dev REL/Relocation.h (which now defines
+#   REL::Segment itself), and master .cpp files (REL/Module.cpp, REL/IDDB.cpp,
+#   F4SE/API.cpp, RE/Bethesda/Calendar.cpp, ...) were compiled against dev
+#   headers -- giving C2011 redefinitions and hundreds of follow-on errors.
+#   Overlaying CommonLibF4 also brings dev CMakeLists.txt, so the source list
+#   follows dev and master-only .cpp files are simply not compiled. Master-only
+#   HEADERS stay on disk, which is what TTS needs (BSGeometry.h in particular).
+#
 #   VTABLE_IDs.h and RTTI_IDs.h get replaced as a side effect, so the earlier
 #   hand-rolled table swap is no longer needed.
 #
@@ -124,8 +134,8 @@ if ((Test-Path (Join-Path $clf4 ".git")) -and (Test-Path $clf4Inc)) {
     try {
         & git fetch --depth=1 origin dev-1.10.163 2>&1 | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "git fetch dev-1.10.163 failed" }
-        & git checkout --force FETCH_HEAD -- CommonLibF4/include 2>&1 | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw "git checkout FETCH_HEAD -- CommonLibF4/include failed" }
+        & git checkout --force FETCH_HEAD -- CommonLibF4 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "git checkout FETCH_HEAD -- CommonLibF4 failed" }
         $head = (& git rev-parse --short FETCH_HEAD 2>$null)
         Write-Host ("  overlaid dev-1.10.163 include tree (FETCH_HEAD=" + $head + ")")
     } finally {
