@@ -155,7 +155,7 @@ namespace RE
 	static_assert(offsetof(BSLight, bIgnoreRim) == 0x17B, "BSLight::bIgnoreRim must be 0x17B");
 	static_assert(offsetof(BSLight, bOccluded) == 0x17C, "BSLight::bOccluded must be 0x17C");
 	static_assert(offsetof(BSLight, bTemporary) == 0x17E, "BSLight::bTemporary must be 0x17E");
-	static_assert(sizeof(BSLight) == 0x236, "BSLight must be 0x236");
+	static_assert(sizeof(BSLight) == 0x238, "BSLight must be 0x238 (0x236 rounded up to the 8-byte alignment NiRefObject imposes)");
 
 	// ------------------------------------------------------------------------
 	// BSEffectShaderProperty
@@ -428,7 +428,7 @@ namespace RE
 		bool          bAlwaysUpdateLights;     // 228
 		BytePad<0x30C - 0x229> pad_229;  // 229 .. 30B (spFog/pBSPortalGraph/lShadowLightAccum/... )
 
-		NiPoint3A     kEyePosition;            // 30C
+		NiPoint3      kEyePosition;            // 30C
 	};
 	static_assert(sizeof(NiNode) == 0x140, "NiNode must be 0x140 for ShadowSceneNode padding to line up");
 	static_assert(offsetof(ShadowSceneNode, fStoredFarClip) == 0x144, "fStoredFarClip must be 0x144");
@@ -591,9 +591,9 @@ namespace RE
 	static_assert(sizeof(NiPlane) == 0x10, "NiPlane must be 0x10");
 	static_assert(sizeof(NiFrustumPlanes) == 0x70, "NiFrustumPlanes must be 0x70");
 	static_assert(sizeof(NiFrustum) == 0x1C, "NiFrustum must be 0x1C");
-	static_assert(sizeof(ShadowSceneNode) == 0x320, "ShadowSceneNode must be 0x320 (NiNode 0x140 + PDB tail)");
+	static_assert(sizeof(ShadowSceneNode) == 0x318, "ShadowSceneNode must be 0x318 (kEyePosition 0x30C + NiPoint3 0xC, rounded to 8)");
 	static_assert(sizeof(NiCullingProcess) == 0x120, "NiCullingProcess must be 0x120");
-	static_assert(sizeof(BSLight) == 0x236, "BSLight must be 0x236");
+	static_assert(sizeof(BSLight) == 0x238, "BSLight must be 0x238 (0x236 rounded up to the 8-byte alignment NiRefObject imposes)");
 }
 
 // ===========================================================================
