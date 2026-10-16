@@ -49,6 +49,71 @@ Write-Host '--- PCH.h tail BEFORE patching ---'
 Get-Content $pchPath | Select-Object -Last 12 | ForEach-Object { '   ' + $_ }
 Write-Host ''
 
+# ================================================================ 0) fix CommonLibF4's engine address tables
+# CRITICAL, and it is a LOAD-TIME problem -- the compiler cannot see it.
+#
+# The workflow checks out powerof3/CommonLibF4@master. master targets the LATEST
+# game version, so a large part of it is simply wrong for 1.10.163. Measuring
+# every REL::ID against the 1.10.163 Address Library:
+#
+#     master              11154 IDs,  9015 valid, 2139 MISSING   (80.8%)
+#     dev-1.10.163        12575 IDs, 12575 valid,    0 missing   (100.0%)
+#
+# CommonLibF4 resolves REL::ID lazily, and `inline static` members initialise as
+# soon as their class is used, so one bad ID pops up at plugin load:
+#     CommonLibF4/src/REL/IDDB.cpp(127): id 2713225 not found!
+# (2713225 was master's ImageSpaceEffectTemporalAA::bDisable -- pulled in only
+#  because TTS reads ImageSpaceEffectTemporalAA::VTABLE.)
+#
+# We cannot simply switch to the dev-1.10.163 branch: it has 337 headers vs
+# master's 454 and does NOT define BSTriShape or BSGeometry, which TTS needs.
+#
+# So: keep master's TYPE DEFINITIONS (complete) and replace only its two engine
+# ADDRESS TABLES with the 1.10.163 ones. Those two files are pure ID lists:
+#
+#     RE/VTABLE_IDs.h   master 10366 IDs (1729 bad)  ->  dev 11909 IDs (0 bad)
+#     RE/RTTI_IDs.h     master 12281 entries (10742 bad) -> dev 11888 (0 bad)
+#
+# and TTS itself references exactly ONE VTABLE::/RTTI:: name, which exists in
+# both tables -- so the blast radius here is tiny and well understood.
+function Get-GitFile([string]$repo, [string]$branch, [string]$relPath, [string]$dest) {
+    Push-Location $repo
+    try {
+        & git fetch --depth=1 origin $branch 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "git fetch $branch failed" }
+        # `git show` writes to stdout; redirect via cmd to avoid PowerShell re-encoding
+        $out = & git show ("FETCH_HEAD:" + $relPath) 2>$null
+        if ($LASTEXITCODE -ne 0 -or -not $out) { throw "git show FETCH_HEAD:$relPath returned nothing" }
+        [System.IO.File]::WriteAllText($dest, ($out -join "`n") + "`n", (New-Object System.Text.UTF8Encoding($false)))
+    } finally {
+        Pop-Location
+    }
+}
+
+$clf4       = $commonlibf4
+$clf4Inc    = Join-Path $clf4 'CommonLibF4/include'
+$tblVT      = Join-Path $clf4Inc 'RE/VTABLE_IDs.h'
+$tblRTTI    = Join-Path $clf4Inc 'RE/RTTI_IDs.h'
+
+if ((Test-Path (Join-Path $clf4 '.git')) -and (Test-Path $tblVT)) {
+    $beforeVT   = (Select-String -Path $tblVT   -Pattern 'REL::ID\(' -AllMatches).Matches.Count
+    $beforeRTTI = (Select-String -Path $tblRTTI -Pattern 'REL::ID\(' -AllMatches).Matches.Count
+    Write-Host "  address-table entries before: VTABLE=$beforeVT RTTI=$beforeRTTI"
+
+    Get-GitFile $clf4 'dev-1.10.163' 'CommonLibF4/include/RE/VTABLE_IDs.h' $tblVT
+    Get-GitFile $clf4 'dev-1.10.163' 'CommonLibF4/include/RE/RTTI_IDs.h'   $tblRTTI
+
+    $afterVT   = (Select-String -Path $tblVT   -Pattern 'REL::ID\(' -AllMatches).Matches.Count
+    $afterRTTI = (Select-String -Path $tblRTTI -Pattern 'REL::ID\(' -AllMatches).Matches.Count
+    Write-Host "  address-table entries after : VTABLE=$afterVT RTTI=$afterRTTI"
+    if ($afterVT -le $beforeVT -or $afterRTTI -le $beforeRTTI) {
+        throw 'address-table swap did not take effect'
+    }
+} else {
+    Write-Host '  (not a git checkout or tables missing -- skipping address-table swap)' -ForegroundColor Yellow
+}
+Write-Host ''
+
 # ================================================================ 1) hkVector4.h
 $hv = Join-Path $commonlibf4 'CommonLibF4/include/RE/Havok/hkVector4.h'
 $t = Get-Content $hv -Raw

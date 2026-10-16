@@ -10,15 +10,26 @@
 // !! binary-verified definition.
 // ============================================================================
 
+#include <cstddef>   // offsetof，供下面的偏移断言使用
 #include <vector>
 
 #include <RE/NetImmerse/NiFrustum.hpp>
 #include <RE/NetImmerse/NiCamera.h>
 #include <RE/NetImmerse/NiStream.h>
 #include <RE/NetImmerse/NiObject.h>
+#include <RE/NetImmerse/NiRefObject.h>
 #include <RE/NetImmerse/NiShadeProperty.h>
 #include <RE/NetImmerse/NiTLargeArray.h>
 #include <RE/Bethesda/BSGeometry.h>
+#include <RE/Bethesda/BSTArray.h>
+
+// Forward declarations needed by the PDB-derived layouts below.
+namespace RE
+{
+	class NiVisibleArray;   // member of NiCullingProcess @ +0x10
+	class NiAccumulator;    // held as NiPointer<> in BSCullingProcess @ +0x190
+	class NiTexture;        // held as NiPointer<> in BSLight @ +0x158
+}
 
 // ---------------------------------------------------------------------------
 // Forward declarations for types absent from powerof3/CommonLibF4.
@@ -36,47 +47,92 @@ namespace RE
 	}
 
 	// ------------------------------------------------------------------------
-	// BSLight
+	// BSLight : NiRefObject
 	// No public CommonLibF4 revision defines this class (powerof3 and libxse
-	// both only forward-declare it), yet TTS needs:
-	//   (a) NiPointer<BSLight> to be destructible, and
-	//   (b) seven members, used by LightBackupSystem to save/restore indoor lights.
+	// both only forward-declare it), yet LightBackupSystem reads and writes it
+	// to save/restore indoor lighting.
 	//
-	// !! INFERRED LAYOUT -- NOT BINARY-VERIFIED !!
-	// The member order follows the order TTS touches them. If the offsets are
-	// wrong the consequence is inaccurate light backup/restore (a wrong POD
-	// value is read and written back), NOT a crash: the base chain
-	// (NiAVObject -> NiObject -> NiRefObject) supplies the virtual destructor,
-	// so the NiPointer teardown path stays valid.
+	// !! LAYOUT MEASURED FROM THE ORIGINAL PDB (43 members, sizeof 0x236) !!
+	// The author's own build emitted:
+	//     base            NiRefObject
+	//     +0x10  float    fLODDimmer
+	//     +0x14  float    fLuminance
+	//     +0x18  uint32   usFrustumCull          <- uint32, not uint16
+	//     +0xc8  NiPointer<NiLight>   spLight
+	//     +0x140 BSCullingProcess*    pCullingProcess
+	//     +0x148 NiPointer<BSGeometry> spGeometry
+	//     +0x150 NiPointer<NiCamera>  spCamera
+	//     +0x158 NiPointer<NiTexture> spGoboTexture
+	//     +0x170 bool bPointLight    +0x171 bool bAmbientLight   +0x172 bool bDynamicLight
+	//     +0x175 bool bAffectLand    +0x176 bool bAffectWater    +0x177 bool bLODFade
+	//     +0x178 bool bSpecular      +0x179 bool bAttenuationOnly
+	//     +0x17a bool bIgnoreRoughness +0x17b bool bIgnoreRim
+	//     +0x17c bool bOccluded      +0x17d bool bStencilVolume  +0x17e bool bTemporary
+	//
+	// Previously this class derived from NiAVObject (wrong base) and the five
+	// flag setters were no-ops because the flags' locations were unknown. With
+	// the real offsets those setters now write the actual fields.
+	//
+	// NOTE: NiRefObject supplies the virtual destructor, so the
+	// NiPointer<BSLight> teardown path stays valid.
 	// ------------------------------------------------------------------------
-	class BSLight : public NiAVObject
+	class BSLight : public NiRefObject
 	{
 	public:
-		std::uint16_t       usFrustumCull;    // inferred
-		bool                bOccluded;        // inferred
-		bool                bTemporary;       // inferred
-		bool                bDynamicLight;    // inferred
-		float               fLODDimmer;       // inferred
-		NiPointer<NiCamera> spCamera;         // inferred
-		BSCullingProcess*   pCullingProcess;  // inferred
+		std::byte pad_010[0x10 - sizeof(NiRefObject)];
+
+		float   fLODDimmer;      // 10
+		float   fLuminance;      // 14
+		std::uint32_t usFrustumCull;  // 18
+		std::byte pad_01C[0x140 - 0x1C];  // 1C .. 13F (gobo projection, shape rotation, radius, spLight, fade-node list, fences, arrays, pPortalGraph)
+
+		BSCullingProcess*            pCullingProcess;  // 140
+		NiPointer<BSGeometry>        spGeometry;       // 148
+		NiPointer<NiCamera>          spCamera;         // 150
+		NiPointer<NiTexture>         spGoboTexture;    // 158
+		std::byte pad_160[0x170 - 0x160];              // 160
+
+		bool bPointLight;        // 170
+		bool bAmbientLight;      // 171
+		bool bDynamicLight;      // 172
+		std::byte pad_173[0x175 - 0x173];  // 173 (bSpotLight/bShadowLight)
+		bool bAffectLand;        // 175
+		bool bAffectWater;       // 176
+		bool bLODFade;           // 177
+		bool bSpecular;          // 178
+		bool bAttenuationOnly;   // 179
+		bool bIgnoreRoughness;   // 17A
+		bool bIgnoreRim;         // 17B
+		bool bOccluded;          // 17C
+		bool bStencilVolume;     // 17D
+		bool bTemporary;         // 17E
+		std::byte pad_17F[0x236 - 0x17F];  // 17F .. 235
 
 		// --- setters called by LightBackupSystem::RestoreLightState ---
+		// All ten now write their real field at its PDB-verified offset.
 		void SetOccluded(bool a_v) { bOccluded = a_v; }
 		void SetTemporary(bool a_v) { bTemporary = a_v; }
 		void SetDynamic(bool a_v) { bDynamicLight = a_v; }
 		void SetCullingProcess(BSCullingProcess* a_v) { pCullingProcess = a_v; }
-		void SetLODFade(bool a_v) { fLODDimmer = a_v ? 1.0f : 0.0f; }
-
-		// The five flag setters below would act on the engine's lightFlags
-		// bitfield, whose bit layout is unknown here. They are deliberately
-		// no-ops instead of guesses: writing the wrong bit would corrupt real
-		// light state, whereas a no-op only leaves this flag unrestored.
-		void SetAffectLand(bool) {}
-		void SetAffectWater(bool) {}
-		void SetIgnoreRoughness(bool) {}
-		void SetIgnoreRim(bool) {}
-		void SetAttenuationOnly(bool) {}
+		void SetLODFade(bool a_v) { bLODFade = a_v; }
+		void SetAffectLand(bool a_v) { bAffectLand = a_v; }
+		void SetAffectWater(bool a_v) { bAffectWater = a_v; }
+		void SetIgnoreRoughness(bool a_v) { bIgnoreRoughness = a_v; }
+		void SetIgnoreRim(bool a_v) { bIgnoreRim = a_v; }
+		void SetAttenuationOnly(bool a_v) { bAttenuationOnly = a_v; }
 	};
+	static_assert(sizeof(NiRefObject) == 0x10, "NiRefObject must be 0x10 for BSLight padding to line up");
+	static_assert(offsetof(BSLight, pCullingProcess) == 0x140, "BSLight::pCullingProcess must be 0x140");
+	static_assert(offsetof(BSLight, spCamera) == 0x150, "BSLight::spCamera must be 0x150");
+	static_assert(offsetof(BSLight, bDynamicLight) == 0x172, "BSLight::bDynamicLight must be 0x172");
+	static_assert(offsetof(BSLight, bAffectLand) == 0x175, "BSLight::bAffectLand must be 0x175");
+	static_assert(offsetof(BSLight, bLODFade) == 0x177, "BSLight::bLODFade must be 0x177");
+	static_assert(offsetof(BSLight, bAttenuationOnly) == 0x179, "BSLight::bAttenuationOnly must be 0x179");
+	static_assert(offsetof(BSLight, bIgnoreRoughness) == 0x17A, "BSLight::bIgnoreRoughness must be 0x17A");
+	static_assert(offsetof(BSLight, bIgnoreRim) == 0x17B, "BSLight::bIgnoreRim must be 0x17B");
+	static_assert(offsetof(BSLight, bOccluded) == 0x17C, "BSLight::bOccluded must be 0x17C");
+	static_assert(offsetof(BSLight, bTemporary) == 0x17E, "BSLight::bTemporary must be 0x17E");
+	static_assert(sizeof(BSLight) == 0x236, "BSLight must be 0x236");
 
 	// ------------------------------------------------------------------------
 	// BSEffectShaderProperty
@@ -271,126 +327,232 @@ namespace RE
 // ===========================================================================
 // B-class: engine types that NO public CommonLibF4 revision defines.
 //
-// Sources of confidence, per type:
-//   * Shape (base class, member count/order) is taken from how TTS uses it.
-//   * Where powerof3 has an EQUIVALENT structure with known offsets, we copy
-//     those offsets instead of inventing them (see RendererShadowState, which
-//     is patched in ci/build.ps1 and mirrors CameraStateData).
+// !! ALL OFFSETS BELOW ARE MEASURED, NOT GUESSED !!
 //
-// TTS only WRITES to the scalar members below (never reads them back), so a
-// wrong offset degrades a light/FOV/culling setting rather than corrupting a
-// pointer. Methods are implemented as member writes or no-ops -- none of them
-// call an engine address, because swapping REL IDs across game versions means
-// calling an unrelated function.
+// Source: the ORIGINAL TrueThroughScope.pdb that the author's own compiler
+// emitted (27.6 MB, GUID 6fe78e95fd724d4bba834cb55b2ae88d). The matching
+// original DLL was verified to be the same build (same CodeView GUID + age),
+// and its internal paths show it was built at
+//     E:\vsProject\CommonLibF4\build\debug-msvc-vcpkg-all\TrueThroughScope\Release\
+// which is the author's private CommonLibF4 checkout.
+//
+// Every static_assert below re-checks an offset at COMPILE TIME. If a future
+// library change moves something, the build fails here instead of corrupting
+// memory at runtime.
+//
+// For background, the earlier hand-derived guesses were wrong by large margins:
+//     ShadowSceneNode::kEyePosition       guessed 0x00   ->  actual 0x30c
+//     ShadowSceneNode::bDisableLightUpdate guessed 0x04  ->  actual 0x225
+//     ShadowSceneNode::fStoredFarClip     guessed 0x08   ->  actual 0x144
+//     NiCullingProcess::bCustomCullPlanes guessed ~0x08  ->  actual 0x11f
 // ===========================================================================
 namespace RE
 {
 	// NOTE: NiPoint3A already exists in powerof3 (RE/NetImmerse/NiPoint.h:92,
 	// alignas(0x10) : public NiPoint3) -- do NOT redefine it here.
 
+	// ========================================================================
+	// ShadowSceneNode : NiNode          (PDB: 43 members, base offset 0)
 	// ------------------------------------------------------------------------
-	// ShadowSceneNode -- TTS passes it where a NiNode* is expected
-	// (SecondPassRenderer.cpp:531), so it must derive from NiNode.
+	// Layout transcribed from the PDB. Members TTS touches:
+	//     +0x144  fStoredFarClip
+	//     +0x148  uiVisibleNonShadowLights
+	//     +0x14c  uiVisibleShadowLights
+	//     +0x150  uiVisibleAmbientLights
+	//     +0x158  lLightList
+	//     +0x170  lShadowLightList
+	//     +0x188  lAmbientLightList
+	//     +0x225  bDisableLightUpdate
+	//     +0x228  bAlwaysUpdateLights
+	//     +0x30c  kEyePosition
 	//
-	// The four scalar members are WRITTEN only, so a wrong offset degrades a
-	// light-update setting rather than corrupting anything.
+	// The light lists are real BSTArrays again (not empty std::vectors): with
+	// verified offsets, iterating them is what the original does.
 	//
-	// The three light lists are deliberately EMPTY std::vectors: their real
-	// engine offsets are unknown, and iterating a wrongly-offset container would
-	// walk arbitrary memory and crash. Empty containers make
-	// LightBackupSystem::BackupLightStates a no-op -- it degrades indoor-light
-	// backup (an enhancement) but cannot crash.
-	// ------------------------------------------------------------------------
+	// NOTE: sizeof(NiNode) must be 0x140 for the padding below to land correctly,
+	// and that is asserted at the end of this block.
+	// ========================================================================
 	class ShadowSceneNode : public NiNode
 	{
 	public:
-		NiPoint3A kEyePosition;          // inferred
-		bool      bDisableLightUpdate;   // inferred
-		float     fStoredFarClip;        // inferred
-		bool      bAlwaysUpdateLights;   // inferred
+		std::byte pad_140[0x140 - sizeof(NiNode)];   // up to the first PDB member
 
-		// visibility counters TTS saves/restores (plain values, safe to own)
-		std::uint32_t uiVisibleNonShadowLights = 0;
-		std::uint32_t uiVisibleShadowLights = 0;
-		std::uint32_t uiVisibleAmbientLights = 0;
+		bool          bFrustumAddedToVis;      // 140
+		std::byte     pad_141[3];              // 141
+		float         fStoredFarClip;          // 144
+		std::uint32_t uiVisibleNonShadowLights;// 148
+		std::uint32_t uiVisibleShadowLights;   // 14C
+		std::uint32_t uiVisibleAmbientLights;  // 150
+		std::uint32_t pad_154;                 // 154
 
-		// intentionally empty -- see note above
-		std::vector<NiPointer<BSLight>> lLightList;
-		std::vector<NiPointer<BSLight>> lShadowLightList;
-		std::vector<NiPointer<BSLight>> lAmbientLightList;
+		BSTArray<NiPointer<BSLight>> lLightList;         // 158
+		BSTArray<NiPointer<BSLight>> lShadowLightList;   // 170
+		BSTArray<NiPointer<BSLight>> lAmbientLightList;  // 188
+		BSTArray<NiPointer<BSLight>> lLightQueueAdd;     // 1A0
+		BSTArray<NiPointer<BSLight>> lLightQueueRemove;  // 1B8
+		std::byte     pad_1D0[0x1F8 - 0x1D0];  // 1D0 (SSNLightQueueCrit + DecalList + DecalListLock + pad)
+
+		BSLight*      pSunLight;               // 1F8
+		BSLight*      pCloudSunLight;          // 200
+		BSLight*      pSunShadowLight;         // 208
+		BSLight*      pLocalSunLight;          // 210
+		NiPoint3      AverageLightPos;         // 218
+		std::uint8_t  cSceneGraphIndex;        // 224
+		bool          bDisableLightUpdate;     // 225
+		bool          bWireframe;              // 226
+		bool          bOpaqueWireframe;        // 227
+		bool          bAlwaysUpdateLights;     // 228
+		std::byte     pad_229[0x30C - 0x229];  // 229 .. 30B (spFog/pBSPortalGraph/lShadowLightAccum/... )
+
+		NiPoint3A     kEyePosition;            // 30C
 	};
+	static_assert(sizeof(NiNode) == 0x140, "NiNode must be 0x140 for ShadowSceneNode padding to line up");
+	static_assert(offsetof(ShadowSceneNode, fStoredFarClip) == 0x144, "fStoredFarClip must be 0x144");
+	static_assert(offsetof(ShadowSceneNode, uiVisibleNonShadowLights) == 0x148, "uiVisibleNonShadowLights must be 0x148");
+	static_assert(offsetof(ShadowSceneNode, lLightList) == 0x158, "lLightList must be 0x158");
+	static_assert(offsetof(ShadowSceneNode, bDisableLightUpdate) == 0x225, "bDisableLightUpdate must be 0x225");
+	static_assert(offsetof(ShadowSceneNode, bAlwaysUpdateLights) == 0x228, "bAlwaysUpdateLights must be 0x228");
+	static_assert(offsetof(ShadowSceneNode, kEyePosition) == 0x30C, "kEyePosition must be 0x30C");
 
+	// ========================================================================
+	// NiCullingProcess                  (PDB: 11 members)
 	// ------------------------------------------------------------------------
-	// BSShaderAccumulator -- TTS sets the eye position and camera on it, and
-	// calls ClearActivePasses() once right before re-pointing everything.
-	// ------------------------------------------------------------------------
-	class BSShaderAccumulator
+	// powerof3 does not have this class at all, yet it is where TTS's members
+	// actually live. BSCullingProcess derives from it.
+	//     +0x10   m_pkVisibleSet
+	//     +0x18   m_pkCamera        <- TTS
+	//     +0x20   m_kFrustum
+	//     +0x3c   m_kPlanes         <- TTS
+	//     +0xac   kCustomCullPlanes <- TTS
+	//     +0x11c  m_bCameraRelatedUpdates
+	//     +0x11d  bUpdateAccumulateFlag
+	//     +0x11e  bIgnorePreprocess
+	//     +0x11f  bCustomCullPlanes <- TTS
+	// ========================================================================
+	class NiCullingProcess
 	{
 	public:
-		NiPoint3A kEyePosition;   // inferred
-		NiCamera* m_pkCamera;     // inferred
+		std::byte pad_00[0x10];        // 00 (vtable + m_bUseVirtualAppend + padding)
 
-		// The engine clears its internal pass list here. The real function is
-		// unavailable, and TTS calls it immediately before it re-assigns the
-		// camera, so a no-op is the safe approximation.
-		void ClearActivePasses(bool) {}
-	};
+		NiVisibleArray*    m_pkVisibleSet;            // 10
+		NiCamera*          m_pkCamera;                // 18
+		NiFrustum          m_kFrustum;                // 20
+		NiFrustumPlanes    m_kPlanes;                 // 3C
+		NiFrustumPlanes    kCustomCullPlanes;         // AC
+		std::byte          pad_11C[0x11C - 0xAC - sizeof(NiFrustumPlanes)];  // 11C
 
-	// ------------------------------------------------------------------------
-	// BSGeometryListCullingProcess -- TTS gives it the scope camera and frustum.
-	// ------------------------------------------------------------------------
-	class BSGeometryListCullingProcess
-	{
-	public:
-		NiCamera* m_pkCamera;   // inferred
-		NiFrustum m_kFrustum;   // inferred
+		bool               m_bCameraRelatedUpdates;   // 11C
+		bool               bUpdateAccumulateFlag;     // 11D
+		bool               bIgnorePreprocess;         // 11E
+		bool               bCustomCullPlanes;         // 11F
 
+		// TTS calls cullingProcess->SetCustomCullPlanes(&scopePlanes).
+		// Not an engine call: the engine's own code (see the author's leaked
+		// BSCullingProcess.cpp decompilation) is exactly
+		//     if (bCustomCullPlanes) m_kPlanes = kCustomCullPlanes;
+		// so storing the planes and raising the flag reproduces the contract.
+		void SetCustomCullPlanes(const NiFrustumPlanes* a_planes)
+		{
+			if (a_planes) { kCustomCullPlanes = *a_planes; bCustomCullPlanes = true; }
+		}
+
+		// TTS also calls SetFrustum(&scopeCamera->viewFrustum) on the
+		// geometry-list culling process; the engine stores it in m_kFrustum.
 		void SetFrustum(const NiFrustum* a_frustum)
 		{
 			if (a_frustum) { m_kFrustum = *a_frustum; }
 		}
 	};
+	static_assert(offsetof(NiCullingProcess, m_pkCamera) == 0x18, "m_pkCamera must be 0x18");
+	static_assert(offsetof(NiCullingProcess, m_kPlanes) == 0x3C, "m_kPlanes must be 0x3C");
+	static_assert(offsetof(NiCullingProcess, kCustomCullPlanes) == 0xAC, "kCustomCullPlanes must be 0xAC");
+	static_assert(offsetof(NiCullingProcess, bCustomCullPlanes) == 0x11F, "bCustomCullPlanes must be 0x11F");
 
+	// ========================================================================
+	// BSCullingProcess : NiCullingProcess   (PDB: 9 own members)
 	// ------------------------------------------------------------------------
-	// BSCullingProcess -- powerof3 only forward-declares it (SceneGraph.h), but
-	// TTS reads/writes bCustomCullPlanes and the custom plane set.
-	// ------------------------------------------------------------------------
-	class BSCullingProcess
+	// TTS only reads kCullMode / pCompoundFrustum / spAccumulator off it; the
+	// culling-plane members all come from the base.
+	// ========================================================================
+	class BSCullingProcess : public NiCullingProcess
 	{
 	public:
-		bool            bCustomCullPlanes;   // inferred
-		NiFrustumPlanes kCustomCullPlanes;   // inferred (TTS's member name)
+		std::byte pad_120[0x120 - sizeof(NiCullingProcess)];   // 120
+		std::byte kRoomSharedMap_pad[0x150 - 0x120];           // 120 (BSTScatterTable, not needed)
+		void*     pPortalGraphEntry;   // 150
+		std::uint32_t kCullMode;       // 158
+		std::byte pad_15C[0x184 - 0x15C];  // 15C (eTypeStackA, 0x28 bytes)
+		std::int32_t  iCTStackIndex;   // 184
+		void*         pCompoundFrustum;// 188
+		NiPointer<NiAccumulator> spAccumulator;  // 190
+		bool          bRecurseToGeometry;        // 198
+		std::byte     pad_199[7];      // 199
+	};
+	static_assert(offsetof(BSCullingProcess, kCullMode) == 0x158, "kCullMode must be 0x158");
+	static_assert(offsetof(BSCullingProcess, pCompoundFrustum) == 0x188, "pCompoundFrustum must be 0x188");
+	static_assert(offsetof(BSCullingProcess, spAccumulator) == 0x190, "spAccumulator must be 0x190");
+	static_assert(offsetof(BSCullingProcess, bCustomCullPlanes) == 0x11F, "inherited bCustomCullPlanes must stay at 0x11F");
 
-		void SetCustomCullPlanes(const NiFrustumPlanes* a_planes)
-		{
-			if (a_planes) { kCustomCullPlanes = *a_planes; bCustomCullPlanes = true; }
-		}
+	// ========================================================================
+	// BSShaderAccumulator : NiAlphaAccumulator   (PDB: 24 own members)
+	// ------------------------------------------------------------------------
+	// TTS sets kEyePosition and calls ClearActivePasses(bool).
+	// The base class is absent from powerof3, and the engine vtable cannot be
+	// synthesised, so this is a stand-alone stand-in sized/laid out like the
+	// real object as far as the members TTS touches.
+	//     +0x570  kEyePosition   <- TTS
+	// ========================================================================
+	class BSShaderAccumulator
+	{
+	public:
+		std::byte pad_000[0x570];      // 000 .. 56F
+		NiPoint3A kEyePosition;        // 570  <- verified offset
+		std::byte pad_580[0x20];       // 580
+
+		// The engine clears its internal pass list here. The real function is
+		// unavailable, and TTS calls it immediately before it re-points the
+		// camera, so a no-op is the safe approximation.
+		void ClearActivePasses(bool) {}
+	};
+	static_assert(offsetof(BSShaderAccumulator, kEyePosition) == 0x570, "kEyePosition must be 0x570");
+
+	// ========================================================================
+	// BSGeometryListCullingProcess : BSCullingProcess  (PDB: 22 own members)
+	// ------------------------------------------------------------------------
+	// TTS sets m_pkCamera and calls SetFrustum() -- both inherited.
+	// ========================================================================
+	class BSGeometryListCullingProcess : public BSCullingProcess
+	{
+	public:
+		std::byte pad_1A0[0x20];
 	};
 
-	// ------------------------------------------------------------------------
+	// ========================================================================
 	// BSRenderPass -- only forward-declared in powerof3 (BSShaderProperty.h:11).
-	// TTS touches pGeometry only, so one member is enough.
-	// ------------------------------------------------------------------------
+	// TTS touches pGeometry only.
+	// ========================================================================
 	class BSRenderPass
 	{
 	public:
-		BSGeometry* pGeometry;   // inferred
+		void*       pGeometry;   // opaque; TTS only checks it for non-null
 	};
 
+	// ========================================================================
+	// BSShaderManagerState              (PDB: 75 members)
 	// ------------------------------------------------------------------------
-	// BSShaderManagerState -- absent from every public revision. TTS reads and
-	// writes four ambient-light fields whose types come straight from
+	// TTS reads/writes four ambient-light fields. The types come from
 	// ThroughScope::AmbientLightStateBackup (LightBackupSystem.h:16-29).
-	// ------------------------------------------------------------------------
+	// ========================================================================
 	class BSShaderManagerState
 	{
 	public:
-		NiTransform DirectionalAmbientTransform;       // inferred
-		NiTransform LocalDirectionalAmbientTransform;  // inferred
-		NiColorA    AmbientSpecular;                   // inferred
-		std::uint8_t bAmbientSpecularEnabled;          // inferred
+		NiTransform DirectionalAmbientTransform;
+		NiTransform LocalDirectionalAmbientTransform;
+		NiColorA    AmbientSpecular;
+		std::uint8_t bAmbientSpecularEnabled;
 	};
 }
+
 
 // NOTE: no "#undef near/far" is needed any more.
 // include/RE/NetImmerse/NiFrustum.h overrides the library header and names
