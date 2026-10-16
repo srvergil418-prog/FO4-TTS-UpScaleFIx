@@ -31,7 +31,7 @@
 // ---------------------------------------------------------------------------
 
 #include <RE/NetImmerse/NiFrustum.h>
-#include <RE/NetImmerse/NiPoint3.h>   // dev-1.10.163 splits NiPoint2/3/4; NiPoint.h does not exist there
+#include <RE/NetImmerse/NiPoint.h>   // powerof3/master keeps the combined header (NiPoint2/3/4 all live here)
 
 namespace RE
 {
