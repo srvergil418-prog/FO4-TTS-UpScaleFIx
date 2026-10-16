@@ -102,12 +102,23 @@ $clf4Inc = Join-Path $clf4 "CommonLibF4/include"
 if ((Test-Path (Join-Path $clf4 ".git")) -and (Test-Path $clf4Inc)) {
     $iseHdr = Join-Path $clf4Inc "RE/Bethesda/ImageSpaceEffect.h"
 
-    $idsBefore = @()
-    if (Test-Path $iseHdr) {
-        $idsBefore = (Select-String -Path $iseHdr -Pattern "REL::ID((d+))" -AllMatches).Matches |
-            ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique
+    # Read the IDs with [regex]::Matches instead of Select-String.
+    # Reason: when Select-String finds nothing, (..).Matches is $null, and
+    # PowerShell runs a ForEach-Object body once with $_ = $null, so
+    # $_.Groups[1] throws "Cannot index into a null array". Reading the text
+    # ourselves and guarding every step keeps this from being fatal.
+    function Get-RelIds([string]$path) {
+        if (-not (Test-Path $path)) { return @() }
+        $txt = [System.IO.File]::ReadAllText($path)
+        $ms = [regex]::Matches($txt, 'REL::ID\((\d+)\)')
+        $acc = @()
+        foreach ($m in $ms) { $acc += $m.Groups[1].Value }
+        if ($acc.Count -eq 0) { return @() }
+        return ($acc | Select-Object -Unique)
     }
-    Write-Host ("  ImageSpaceEffect.h IDs before: " + ($idsBefore -join ", "))
+
+    $idsBefore = Get-RelIds $iseHdr
+    Write-Host ("  ImageSpaceEffect.h IDs before: " + $(if ($idsBefore.Count) { $idsBefore -join ", " } else { "(none)" }))
 
     Push-Location $clf4
     try {
@@ -123,9 +134,8 @@ if ((Test-Path (Join-Path $clf4 ".git")) -and (Test-Path $clf4Inc)) {
 
     if (-not (Test-Path $iseHdr)) { throw "ImageSpaceEffect.h disappeared after the overlay" }
 
-    $idsAfter = (Select-String -Path $iseHdr -Pattern "REL::ID((d+))" -AllMatches).Matches |
-        ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique
-    Write-Host ("  ImageSpaceEffect.h IDs after : " + ($idsAfter -join ", "))
+    $idsAfter = Get-RelIds $iseHdr
+    Write-Host ("  ImageSpaceEffect.h IDs after : " + $(if ($idsAfter.Count) { $idsAfter -join ", " } else { "(none)" }))
 
     if ($idsAfter -contains "2713225") {
         throw "ImageSpaceEffect.h still carries the stale master ID 2713225 -- overlay did not take effect"
@@ -133,7 +143,6 @@ if ((Test-Path (Join-Path $clf4 ".git")) -and (Test-Path $clf4Inc)) {
     if (-not ($idsAfter -contains "1500590")) {
         throw "ImageSpaceEffect.h is missing the 1.10.163 ID 1500590 -- unexpected content after overlay"
     }
-
     # Types that exist only on master must survive the overlay.
     foreach ($must in @("RE/Bethesda/BSGeometry.h")) {
         if (-not (Test-Path (Join-Path $clf4Inc $must))) {
