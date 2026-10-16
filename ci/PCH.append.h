@@ -527,9 +527,14 @@ namespace RE
 	class BSShaderAccumulator
 	{
 	public:
-		BytePad<0x570> pad_000;      // 000 .. 56F
-		NiPoint3A kEyePosition;        // 570  <- verified offset
-		BytePad<0x20> pad_580;       // 580
+		// m_pkCamera lives in the base NiAccumulator at +0x10 (PDB fieldlist
+// 0x24dde). NiAlphaAccumulator adds members from +0x50; BSShaderAccumulator's
+// own members start at +0x58 -- hence the spacing below.
+BytePad<0x10> pad_000;         // 000 (base vtable + refcount)
+NiCamera*     m_pkCamera;      // 010  <- inherited from NiAccumulator
+BytePad<0x570 - 0x18> pad_018; // 018 .. 56F
+NiPoint3A     kEyePosition;    // 570  <- verified offset
+BytePad<0x20> pad_580;         // 580
 
 		// The engine clears its internal pass list here. The real function is
 		// unavailable, and TTS calls it immediately before it re-points the
@@ -537,6 +542,7 @@ namespace RE
 		void ClearActivePasses(bool) {}
 	};
 	static_assert(offsetof(BSShaderAccumulator, kEyePosition) == 0x570, "kEyePosition must be 0x570");
+	static_assert(offsetof(BSShaderAccumulator, m_pkCamera) == 0x10, "BSShaderAccumulator::m_pkCamera must be 0x10 (inherited from NiAccumulator)");
 
 	// ========================================================================
 	// BSGeometryListCullingProcess : BSCullingProcess  (PDB: 22 own members)
@@ -556,7 +562,7 @@ namespace RE
 	class BSRenderPass
 	{
 	public:
-		void*       pGeometry;   // opaque; TTS only checks it for non-null
+		BSGeometry* pGeometry;   // PDB/usage: TTS reads ->name (NiObjectNET) and ->world.scale (NiAVObject)
 	};
 
 	// ========================================================================
