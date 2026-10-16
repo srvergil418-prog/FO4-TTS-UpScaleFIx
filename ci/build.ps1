@@ -210,10 +210,29 @@ if ((Test-Path (Join-Path $clf4 ".git")) -and (Test-Path $clf4Inc)) {
     # FULL replacement: walk every header under include/ and rewrite REL::ID textually.
     # Why the whole tree instead of a file list: the crash happens during static
     # initialisation and produces no "not found" line, so there is no way to tell
-    $idFixRoot = Join-Path $clf4 "CommonLibF4/include"
+    # Scan BOTH include/ and src/.
+    #
+    # Originally this only walked include/, so every REL::ID inside the library's
+    # own .cpp files was left untouched and never entered the fix table. Those
+    # IDs still get compiled into the DLL and resolved at run time, which is why
+    # dead IDs kept surfacing one at a time as the user clicked through features
+    # (e.g. "id 2269806 not found!" when opening the Debug tab -- that one is
+    # RE/NetImmerse/NiMatrix3.cpp's NiMatrix3::ToEulerAnglesXYZ).
+    # Measured on the current master overlay: src/ holds 34 REL::IDs, 19 of which
+    # do not exist in the 1.10.163 address library.
+    $idFixRoots = @(
+        (Join-Path $clf4 "CommonLibF4/include"),
+        (Join-Path $clf4 "CommonLibF4/src")
+    )
     $totalFixed = 0
     $filesTouched = 0
-    $allHeaders = Get-ChildItem -Path $idFixRoot -Recurse -Include *.h,*.hpp,*.inl -File -ErrorAction SilentlyContinue
+    $allHeaders = @()
+    foreach ($root in $idFixRoots) {
+        if (Test-Path $root) {
+            $allHeaders += Get-ChildItem -Path $root -Recurse -Include *.h,*.hpp,*.inl,*.cpp -File -ErrorAction SilentlyContinue
+        }
+    }
+    Write-Host ("  id fix scope: " + $allHeaders.Count + " files under include/ + src/")
     foreach ($f in $allHeaders) {
         $before = [System.IO.File]::ReadAllText($f.FullName)
         $after = $before
@@ -700,6 +719,36 @@ if ($sp4 -eq $sp3) { throw 'SecondPassRenderer: Renderer::GetSingleton block not
 
 Set-Content $spr -Value $sp4 -NoNewline -Encoding utf8
 Write-Host '  [11/12] SecondPassRenderer.cpp downgraded (DrawWorld, SetCameraData, PosAdjust)'
+
+    # ================================================================ 11b) NiMatrix3::ToEulerAnglesXYZ
+    #
+    # src/RE/NetImmerse/NiMatrix3.cpp reaches the engine through
+    # REL::ID(2269806..2269825). That entire ID family belongs to the newer address
+    # library and NONE of it exists in the 1.10.163 database; dev-1.10.163 does not
+    # even ship this .cpp, so the replacement table cannot help. Function-local
+    # statics resolve lazily, so only the ones actually called matter -- and TTS
+    # calls exactly one, ToEulerAnglesXYZ, from 4 places in DebugPanel.cpp.
+    # Symptom when it fires: opening the Debug tab pops "id 2269806 not found!".
+    #
+    # It is a pure math helper (3x3 rotation matrix -> XYZ Euler angles), so just
+    # compute it. Replacement text lives in ci/NiMatrix3.ToEulerAnglesXYZ.inc.
+    $nm3 = Join-Path $clf4 "CommonLibF4/src/RE/NetImmerse/NiMatrix3.cpp"
+    $nm3inc = Join-Path $PSScriptRoot "NiMatrix3.ToEulerAnglesXYZ.inc"
+    if ((Test-Path $nm3) -and (Test-Path $nm3inc)) {
+        $nm3text = [System.IO.File]::ReadAllText($nm3)
+        if (($nm3text.Contains("REL::ID(2269806)")) -and (-not $nm3text.Contains("[TTS CI] The engine implementation was reached"))) {
+            $implText = [System.IO.File]::ReadAllText($nm3inc).TrimEnd()
+            $rxNm3 = [regex]::new("(?s)bool\s+NiMatrix3::ToEulerAnglesXYZ\(float&\s+a_x,\s*float&\s+a_y,\s*float&\s+a_z\)\s+const\s*\{.*?\r?\n\t\}")
+            $nm3new = $rxNm3.Replace($nm3text, $implText, 1)
+            if ($nm3new -eq $nm3text) { throw "NiMatrix3: ToEulerAnglesXYZ patch did not match" }
+            [System.IO.File]::WriteAllText($nm3, $nm3new, (New-Object System.Text.UTF8Encoding($false)))
+            Write-Host "  [11b] NiMatrix3.cpp ToEulerAnglesXYZ -> pure-math implementation" -ForegroundColor Green
+        } else {
+            Write-Host "  [11b] NiMatrix3.cpp already patched or ID absent -- skipping" -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "  [11b] NiMatrix3.cpp or the .inc template missing -- skipping" -ForegroundColor Yellow
+    }
 
 # (d) TESEquipEvent -- its event-source singleton is exposed by no public
 #     CommonLibF4 and its REL ID is unknown. Equip detection only drives the
