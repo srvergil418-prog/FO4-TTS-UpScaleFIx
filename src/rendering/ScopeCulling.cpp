@@ -178,9 +178,9 @@ namespace ThroughScope
 
         // 从旋转矩阵提取相机轴向（世界空间）
         // Row0 = 前向, Row1 = 上方, Row2 = 右方 (基于之前的调试)
-        RE::NiPoint3 forward(world.rotate.entry[0].pt[0], world.rotate.entry[0].pt[1], world.rotate.entry[0].pt[2]);
-        RE::NiPoint3 up(world.rotate.entry[1].pt[0], world.rotate.entry[1].pt[1], world.rotate.entry[1].pt[2]);
-        RE::NiPoint3 right(world.rotate.entry[2].pt[0], world.rotate.entry[2].pt[1], world.rotate.entry[2].pt[2]);
+        RE::NiPoint3 forward(world.rotate.entry[0][0], world.rotate.entry[0][1], world.rotate.entry[0][2]);
+        RE::NiPoint3 up(world.rotate.entry[1][0], world.rotate.entry[1][1], world.rotate.entry[1][2]);
+        RE::NiPoint3 right(world.rotate.entry[2][0], world.rotate.entry[2][1], world.rotate.entry[2][2]);
 
         // 相机位置
         const RE::NiPoint3& camPos = world.translate;
