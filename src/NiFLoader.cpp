@@ -14,9 +14,9 @@ namespace
 	//   CommonLibF4.lib (powerof3 compiles no NiStream.cpp), so the build shim in
 	//   ci/PCH.append.h had to fake them -- with `Load()` simply returning false.
 	//   Consequence: NIFLoader::LoadNIF ALWAYS returned nullptr, the scope model
-	//   never attached, and the in-game settings panel showed exactly
-	//       "无 TTSNode"  and  "状态: 未加载"
-	//   while aiming produced no visible effect at all.
+	//   never attached, and the in-game settings panel read (in Chinese)
+	//   "no TTSNode" / "status: not loaded", while aiming produced no visible
+	//   effect at all.
 	//
 	//   BSModelDB::Demand(const char*, NiPointer<NiNode>*, const ArgsType&) is the
 	//   game's supported "load this model by path" entry point, and both of its
