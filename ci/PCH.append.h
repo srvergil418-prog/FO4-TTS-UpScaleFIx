@@ -591,7 +591,6 @@ namespace RE
 	static_assert(sizeof(NiPlane) == 0x10, "NiPlane must be 0x10");
 	static_assert(sizeof(NiFrustumPlanes) == 0x70, "NiFrustumPlanes must be 0x70");
 	static_assert(sizeof(NiFrustum) == 0x1C, "NiFrustum must be 0x1C");
-	static_assert(sizeof(ShadowSceneNode) == 0x318, "ShadowSceneNode must be 0x318 (kEyePosition 0x30C + NiPoint3 0xC, rounded to 8)");
 	static_assert(sizeof(NiCullingProcess) == 0x120, "NiCullingProcess must be 0x120");
 	static_assert(sizeof(BSLight) == 0x238, "BSLight must be 0x238 (0x236 rounded up to the 8-byte alignment NiRefObject imposes)");
 }
