@@ -79,23 +79,23 @@ namespace RE
 	class BSLight : public NiRefObject
 	{
 	public:
-		std::byte pad_010[0x10 - sizeof(NiRefObject)];
+		BytePad<0x10 - sizeof(NiRefObject)> pad_010;
 
 		float   fLODDimmer;      // 10
 		float   fLuminance;      // 14
 		std::uint32_t usFrustumCull;  // 18
-		std::byte pad_01C[0x140 - 0x1C];  // 1C .. 13F (gobo projection, shape rotation, radius, spLight, fade-node list, fences, arrays, pPortalGraph)
+		BytePad<0x140 - 0x1C> pad_01C;  // 1C .. 13F (gobo projection, shape rotation, radius, spLight, fade-node list, fences, arrays, pPortalGraph)
 
 		BSCullingProcess*            pCullingProcess;  // 140
 		NiPointer<BSGeometry>        spGeometry;       // 148
 		NiPointer<NiCamera>          spCamera;         // 150
 		NiPointer<NiTexture>         spGoboTexture;    // 158
-		std::byte pad_160[0x170 - 0x160];              // 160
+		BytePad<0x170 - 0x160> pad_160;              // 160
 
 		bool bPointLight;        // 170
 		bool bAmbientLight;      // 171
 		bool bDynamicLight;      // 172
-		std::byte pad_173[0x175 - 0x173];  // 173 (bSpotLight/bShadowLight)
+		BytePad<0x175 - 0x173> pad_173;  // 173 (bSpotLight/bShadowLight)
 		bool bAffectLand;        // 175
 		bool bAffectWater;       // 176
 		bool bLODFade;           // 177
@@ -106,7 +106,7 @@ namespace RE
 		bool bOccluded;          // 17C
 		bool bStencilVolume;     // 17D
 		bool bTemporary;         // 17E
-		std::byte pad_17F[0x236 - 0x17F];  // 17F .. 235
+		BytePad<0x236 - 0x17F> pad_17F;  // 17F .. 235
 
 		// --- setters called by LightBackupSystem::RestoreLightState ---
 		// All ten now write their real field at its PDB-verified offset.
@@ -348,6 +348,27 @@ namespace RE
 // ===========================================================================
 namespace RE
 {
+	// ------------------------------------------------------------------------
+	// BytePad<N> -- zero-filled spacer used to land members on PDB-verified
+	// offsets.
+	//
+	// Why a template instead of `std::byte pad[N]`: when the base class already
+	// ends exactly on the target offset, N is 0, and MSVC rejects a zero-length
+	// array with C2229 ("illegal zero-sized array"). GCC/Clang tolerate it, MSVC
+	// does not. The N == 0 specialisation contributes nothing and keeps the
+	// arithmetic in the member lists honest.
+	// ------------------------------------------------------------------------
+	template <std::size_t N>
+	struct BytePad
+	{
+		std::byte data[N];
+	};
+
+	template <>
+	struct BytePad<0>
+	{
+	};
+
 	// NOTE: NiPoint3A already exists in powerof3 (RE/NetImmerse/NiPoint.h:92,
 	// alignas(0x10) : public NiPoint3) -- do NOT redefine it here.
 
@@ -375,10 +396,10 @@ namespace RE
 	class ShadowSceneNode : public NiNode
 	{
 	public:
-		std::byte pad_140[0x140 - sizeof(NiNode)];   // up to the first PDB member
+		BytePad<0x140 - sizeof(NiNode)> pad_140;   // up to the first PDB member
 
 		bool          bFrustumAddedToVis;      // 140
-		std::byte     pad_141[3];              // 141
+		BytePad<3> pad_141;              // 141
 		float         fStoredFarClip;          // 144
 		std::uint32_t uiVisibleNonShadowLights;// 148
 		std::uint32_t uiVisibleShadowLights;   // 14C
@@ -390,7 +411,7 @@ namespace RE
 		BSTArray<NiPointer<BSLight>> lAmbientLightList;  // 188
 		BSTArray<NiPointer<BSLight>> lLightQueueAdd;     // 1A0
 		BSTArray<NiPointer<BSLight>> lLightQueueRemove;  // 1B8
-		std::byte     pad_1D0[0x1F8 - 0x1D0];  // 1D0 (SSNLightQueueCrit + DecalList + DecalListLock + pad)
+		BytePad<0x1F8 - 0x1D0> pad_1D0;  // 1D0 (SSNLightQueueCrit + DecalList + DecalListLock + pad)
 
 		BSLight*      pSunLight;               // 1F8
 		BSLight*      pCloudSunLight;          // 200
@@ -402,7 +423,7 @@ namespace RE
 		bool          bWireframe;              // 226
 		bool          bOpaqueWireframe;        // 227
 		bool          bAlwaysUpdateLights;     // 228
-		std::byte     pad_229[0x30C - 0x229];  // 229 .. 30B (spFog/pBSPortalGraph/lShadowLightAccum/... )
+		BytePad<0x30C - 0x229> pad_229;  // 229 .. 30B (spFog/pBSPortalGraph/lShadowLightAccum/... )
 
 		NiPoint3A     kEyePosition;            // 30C
 	};
@@ -432,14 +453,14 @@ namespace RE
 	class NiCullingProcess
 	{
 	public:
-		std::byte pad_00[0x10];        // 00 (vtable + m_bUseVirtualAppend + padding)
+		BytePad<0x10> pad_00;        // 00 (vtable + m_bUseVirtualAppend + padding)
 
 		NiVisibleArray*    m_pkVisibleSet;            // 10
 		NiCamera*          m_pkCamera;                // 18
 		NiFrustum          m_kFrustum;                // 20
 		NiFrustumPlanes    m_kPlanes;                 // 3C
 		NiFrustumPlanes    kCustomCullPlanes;         // AC
-		std::byte          pad_11C[0x11C - 0xAC - sizeof(NiFrustumPlanes)];  // 11C
+		BytePad<0x11C - 0xAC - sizeof(NiFrustumPlanes)> pad_11C;  // 11C
 
 		bool               m_bCameraRelatedUpdates;   // 11C
 		bool               bUpdateAccumulateFlag;     // 11D
@@ -477,16 +498,16 @@ namespace RE
 	class BSCullingProcess : public NiCullingProcess
 	{
 	public:
-		std::byte pad_120[0x120 - sizeof(NiCullingProcess)];   // 120
-		std::byte kRoomSharedMap_pad[0x150 - 0x120];           // 120 (BSTScatterTable, not needed)
+		BytePad<0x120 - sizeof(NiCullingProcess)> pad_120;   // 120
+		BytePad<0x150 - 0x120> kRoomSharedMap_pad;           // 120 (BSTScatterTable, not needed)
 		void*     pPortalGraphEntry;   // 150
 		std::uint32_t kCullMode;       // 158
-		std::byte pad_15C[0x184 - 0x15C];  // 15C (eTypeStackA, 0x28 bytes)
+		BytePad<0x184 - 0x15C> pad_15C;  // 15C (eTypeStackA, 0x28 bytes)
 		std::int32_t  iCTStackIndex;   // 184
 		void*         pCompoundFrustum;// 188
 		NiPointer<NiAccumulator> spAccumulator;  // 190
 		bool          bRecurseToGeometry;        // 198
-		std::byte     pad_199[7];      // 199
+		BytePad<7> pad_199;      // 199
 	};
 	static_assert(offsetof(BSCullingProcess, kCullMode) == 0x158, "kCullMode must be 0x158");
 	static_assert(offsetof(BSCullingProcess, pCompoundFrustum) == 0x188, "pCompoundFrustum must be 0x188");
@@ -505,9 +526,9 @@ namespace RE
 	class BSShaderAccumulator
 	{
 	public:
-		std::byte pad_000[0x570];      // 000 .. 56F
+		BytePad<0x570> pad_000;      // 000 .. 56F
 		NiPoint3A kEyePosition;        // 570  <- verified offset
-		std::byte pad_580[0x20];       // 580
+		BytePad<0x20> pad_580;       // 580
 
 		// The engine clears its internal pass list here. The real function is
 		// unavailable, and TTS calls it immediately before it re-points the
@@ -524,7 +545,7 @@ namespace RE
 	class BSGeometryListCullingProcess : public BSCullingProcess
 	{
 	public:
-		std::byte pad_1A0[0x20];
+		BytePad<0x20> pad_1A0;
 	};
 
 	// ========================================================================
