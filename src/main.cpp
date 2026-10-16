@@ -405,7 +405,22 @@ F4SE_EXPORT bool F4SEAPI F4SEPlugin_Load(const F4SE::LoadInterface* a_f4se)
 	}
 
 TTS_TRACE("LOAD-TRACE-09 before F4SE::Init");
-	F4SE::Init(a_f4se);
+	// EXC-TRACE: F4SE::Init() reaches REL::IDDB::get(), whose constructor opens
+	// Data/F4SE/Plugins/version-<ver>.bin via mmio::mapped_file_source.
+	// rsm-mmio throws rather than returning false, and IDDB has no catch, so
+	// a failure becomes std::terminate (observed as fault offset 0x0).
+	try {
+		F4SE::Init(a_f4se);
+		TTS_TRACE("EXC-TRACE: F4SE::Init returned normally");
+	} catch (const std::exception& e) {
+		std::string _exm = "EXC-TRACE: std::exception from F4SE::Init: ";
+		_exm += e.what();
+		TTS_TraceWrite(_exm.c_str());
+		return false;
+	} catch (...) {
+		TTS_TRACE("EXC-TRACE: non-std exception from F4SE::Init");
+		return false;
+	}
 	TTS_TRACE("LOAD-TRACE-10 after F4SE::Init");
 	// Register plugin for F4SE messages
 	const F4SE::MessagingInterface* message = F4SE::GetMessagingInterface();
