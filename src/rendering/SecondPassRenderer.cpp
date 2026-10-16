@@ -605,7 +605,7 @@ namespace ThroughScope
 			}
 
 			if (contextPtr) {
-				auto context = (RE::BSGraphics::Context*)contextPtr;
+				auto context = (RE::BSGraphics::TTSContextPlaceholder*)contextPtr;
 				auto viewProjMat = context->shadowState.CameraData.viewProjMat;
 
 				// 保存当前矩阵到 "上一帧" 供下一帧 MV 计算使用
@@ -644,7 +644,7 @@ namespace ThroughScope
 			}
 
 			if (contextPtr) {
-				auto context = (RE::BSGraphics::Context*)contextPtr;
+				auto context = (RE::BSGraphics::TTSContextPlaceholder*)contextPtr;
 				backupPosAdjust = context->shadowState.PosAdjust;
 
 				// 设置 PosAdjust 为瞄具相机的世界位置
@@ -980,7 +980,7 @@ namespace ThroughScope
 		float targetFOV = ScopeCamera::GetTargetFOV();
 
 		// 限制FOV范围以避免极端俯仰角下的数值不稳定
-		float pitch = asin(-scopeCamera->world.rotate.entry[2].pt[1]);
+		float pitch = asin(-scopeCamera->world.rotate.entry[2][1]);
 		float pitchDeg = pitch * 57.295779513f;
 		if (abs(pitchDeg) > 70.0f) {
 			float factor = (90.0f - abs(pitchDeg)) / 20.0f;
