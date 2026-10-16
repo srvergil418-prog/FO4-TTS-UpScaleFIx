@@ -484,11 +484,20 @@ namespace ThroughScope {
 			if (traceThis) { TTS_TRACE("DI-TRACE: F after RSGetViewports"); }
 			
 			D3DPERF_EndEvent();
-			
-			if (ImGuiManager::GetSingleton()->IsMenuOpen() && !Utilities::IsPlayerInADS()) {
-				return phookD3D11DrawIndexed(pContext, IndexCount, StartIndexLocation, BaseVertexLocation);
+			if (traceThis) { TTS_TRACE("DI-TRACE: G after D3DPERF_EndEvent"); }
+
+			const bool menuOpen = ImGuiManager::GetSingleton()->IsMenuOpen();
+			if (traceThis) { TTS_TRACE(menuOpen ? "DI-TRACE: H IsMenuOpen=TRUE" : "DI-TRACE: H IsMenuOpen=false"); }
+
+			if (menuOpen) {
+				const bool inAds = Utilities::IsPlayerInADS();
+				if (traceThis) { TTS_TRACE(inAds ? "DI-TRACE: I IsPlayerInADS=TRUE" : "DI-TRACE: I IsPlayerInADS=false"); }
+				if (!inAds) {
+					return phookD3D11DrawIndexed(pContext, IndexCount, StartIndexLocation, BaseVertexLocation);
+				}
 			}
-			
+
+			if (traceThis) { TTS_TRACE("DI-TRACE: J returning (skip original draw)"); }
 			return;  // 跳过原始绘制，后续在 SetScopeTexture 中用自定义 shader 绘制
 		} else {
 			return phookD3D11DrawIndexed(pContext, IndexCount, StartIndexLocation, BaseVertexLocation);
