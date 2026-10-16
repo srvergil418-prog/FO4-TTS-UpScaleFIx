@@ -1,6 +1,7 @@
 // EventHandler.cpp
 #include "EventHandler.h"
 #include "DataPersistence.h"
+#include "TTSTrace.h"   // always-flushed trace for crash triage
 #include <NiFLoader.h>
 #include "D3DHooks.h"
 #include "ScopeCamera.h"
@@ -239,31 +240,43 @@ namespace ThroughScope
 
 	RE::BSEventNotifyControl AnimationGraphEventWatcher::hkProcessEvent(RE::BSAnimationGraphEvent& evn, RE::BSTEventSource<RE::BSAnimationGraphEvent>* src)
 	{
-		FnProcessEvent fn = fnHash.at(*(uint64_t*)this);
-		std::string eventName = evn.tag.data();
-		// logger::info("Event Name: {}", eventName.c_str());
-		// Get current weapon info including available modifications
-		
-		//if (std::strcmp(eventName.c_str(), "weaponDraw") == 0)
-		//{
-		//	ScopeCamera::CleanupScopeResources();
-		//	auto weaponInfo = DataPersistence::GetCurrentWeaponInfo();
-		//	if (weaponInfo.currentConfig) {
-		//		ScopeCamera::SetupScopeForWeapon(weaponInfo);
-		//		isQuerySpawnNode = false;
-		//		if (!ScopeCamera::hasFirstSpawnNode) {
-		//			ScopeCamera::hasFirstSpawnNode = true;
-		//			logger::warn("FirstSpawn Finish: AnimationGraphEventWatcher");
-		//		}
-		//		
-		//	} else {
-		//		// No configuration found - do nothing as requested
-		//		logger::info("No scope configuration found for this weapon - no action taken");
-		//	}
-		//}
-		
+		// AG-TRACE: this fires on every animation-graph event, which is precisely
+		// what a weapon swap produces -- and the repro is "swap the weapon away and
+		// back, then it crashes". Every step below dereferences something that can
+		// be bad: *(uint64_t*)this (the object's vtable), evn.tag, and fn (the saved
+		// original). Capped so the log stays readable.
+		static std::uint32_t s_agTraceBudget = 120;
+		const bool traceThis = (s_agTraceBudget > 0);
+		if (traceThis) { --s_agTraceBudget; TTS_TRACE("AG-TRACE: A enter hkProcessEvent"); }
 
-		return fn ? (this->*fn)(evn, src) : BSEventNotifyControl::kContinue;
+		// Was: fnHash.at(*(uint64_t*)this). unordered_map::at throws
+		// std::out_of_range when the key is missing and nothing here catches it,
+		// so any vtable we did not register would abort the process. If the vtable
+		// genuinely is not registered we cannot call through safely -- pass through.
+		auto it = fnHash.find(*(uint64_t*)this);
+		if (it == fnHash.end()) {
+			if (traceThis) { TTS_TRACE("AG-TRACE: B vtable NOT registered -> pass through"); }
+			return RE::BSEventNotifyControl::kContinue;
+		}
+		if (traceThis) { TTS_TRACE("AG-TRACE: B vtable registered"); }
+
+		FnProcessEvent fn = it->second;
+
+		if (traceThis) { TTS_TRACE("AG-TRACE: C before reading evn.tag"); }
+		std::string eventName = evn.tag.data();
+		(void)eventName;  // only consumed by the disabled logging below
+		if (traceThis) { TTS_TRACE("AG-TRACE: D got event tag"); }
+
+		if (!fn) {
+			if (traceThis) { TTS_TRACE("AG-TRACE: E fn null -> continue"); }
+			return RE::BSEventNotifyControl::kContinue;
+		}
+		if (traceThis) { TTS_TRACE("AG-TRACE: E calling original ProcessEvent"); }
+
+		auto result = (this->*fn)(evn, src);
+
+		if (traceThis) { TTS_TRACE("AG-TRACE: F original returned"); }
+		return result;
 	}
 
 	void AnimationGraphEventWatcher::RegisterForEvents()
