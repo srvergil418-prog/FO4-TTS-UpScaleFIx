@@ -378,47 +378,19 @@ F4SE_EXPORT bool F4SEAPI F4SEPlugin_Load(const F4SE::LoadInterface* a_f4se)
 
 		// VER-TRACE: Module::get().version() drives the address-library filename.
 	// If it is not 1.10.163.0 the .bin lookup fails and IDDB report_and_fail()s.
-	try {
-		const auto _v  = REL::Module::get().version();
-		const auto _vs = std::format("VER-TRACE: Module version = {}", _v.string());
-		TTS_TraceWrite(_vs.c_str());
-	} catch (...) {
-		TTS_TraceWrite("VER-TRACE: REL::Module::get().version() threw");
-	}
-
-	{
-		char _pbuf[320] = { 0 };
-		const DWORD _attr = GetFileAttributesA("Data/F4SE/Plugins/version-1-10-163-0.bin");
-		wsprintfA(_pbuf, "VER-TRACE: GetFileAttributes(Data/F4SE/Plugins/version-1-10-163-0.bin) = %lu (0xFFFFFFFF = missing)",
-		          (unsigned long)_attr);
-		TTS_TraceWrite(_pbuf);
-
-		char _cwd[MAX_PATH] = { 0 };
-		GetCurrentDirectoryA(MAX_PATH, _cwd);
-		char _cbuf[MAX_PATH + 40] = { 0 };
-		wsprintfA(_cbuf, "VER-TRACE: cwd = %s", _cwd);
-		TTS_TraceWrite(_cbuf);
-
-		const DWORD _attr2 = GetFileAttributesA("E:\\Custom Fallout4\\Fallout 4\\Data\\F4SE\\Plugins\\version-1-10-163-0.bin");
-		wsprintfA(_pbuf, "VER-TRACE: absolute E:\\ path attr = %lu", (unsigned long)_attr2);
-		TTS_TraceWrite(_pbuf);
-	}
-
-TTS_TRACE("LOAD-TRACE-09 before F4SE::Init");
-	// EXC-TRACE: F4SE::Init() reaches REL::IDDB::get(), whose constructor opens
-	// Data/F4SE/Plugins/version-<ver>.bin via mmio::mapped_file_source.
-	// rsm-mmio throws rather than returning false, and IDDB has no catch, so
-	// a failure becomes std::terminate (observed as fault offset 0x0).
-	try {
+	// EXC-TRACE: catch access violations too. catch(...) does NOT catch SEH,
+	// and the crash inside F4SE::Init (-> REL::IDDB::get()) is a real
+	// access violation, so use __try/__except and record the code + the
+	// failing address.
+	__try {
 		F4SE::Init(a_f4se);
 		TTS_TRACE("EXC-TRACE: F4SE::Init returned normally");
-	} catch (const std::exception& e) {
-		std::string _exm = "EXC-TRACE: std::exception from F4SE::Init: ";
-		_exm += e.what();
-		TTS_TraceWrite(_exm.c_str());
-		return false;
-	} catch (...) {
-		TTS_TRACE("EXC-TRACE: non-std exception from F4SE::Init");
+	} __except (EXCEPTION_EXECUTE_HANDLER) {
+		char _ebuf[256] = { 0 };
+		wsprintfA(_ebuf, "EXC-TRACE: SEH code=0x%08lX addr=0x%p",
+		          (unsigned long)GetExceptionCode(),
+		          GetExceptionInformation() ? (void*)GetExceptionInformation()->ExceptionRecord->ExceptionAddress : (void*)0);
+		TTS_TraceWrite(_ebuf);
 		return false;
 	}
 	TTS_TRACE("LOAD-TRACE-10 after F4SE::Init");
