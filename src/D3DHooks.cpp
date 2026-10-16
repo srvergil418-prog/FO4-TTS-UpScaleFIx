@@ -500,6 +500,16 @@ namespace ThroughScope {
 			if (traceThis) { TTS_TRACE("DI-TRACE: J returning (skip original draw)"); }
 			return;  // 跳过原始绘制，后续在 SetScopeTexture 中用自定义 shader 绘制
 		} else {
+			// The non-scope-quad path is the overwhelmingly common one (every other
+			// draw call in the frame), so it never had a trace line -- which is why
+			// a crash inside it would have looked like "hkDrawIndexed finished fine".
+			// It forwards through the MinHook trampoline, so an invalid trampoline
+			// faults here too. Own budget, own tag.
+			static std::uint32_t s_diElseBudget = 120;
+			if (s_diElseBudget > 0) {
+				--s_diElseBudget;
+				TTS_TRACE("DI-TRACE: K else-branch -> original DrawIndexed");
+			}
 			return phookD3D11DrawIndexed(pContext, IndexCount, StartIndexLocation, BaseVertexLocation);
 		}
 	}
