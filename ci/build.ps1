@@ -198,6 +198,59 @@ if ($s3 -eq $s) { throw 'SettingsPanel.cpp: ImGuiKey_Mod* pattern not found' }
 Set-Content $set -Value $s3 -NoNewline -Encoding utf8
 Write-Host '  [8/9] SettingsPanel.cpp (ImGuiMod_*)'
 
+# ================================================================ 8c) CMakeLists.txt HLSL copy paths
+# TTS's CMakeLists.txt hardcodes THREE absolute output paths that only exist on
+# the author's machine:
+#     G:/Games/FO4_SO/mods/TTS True Through Scope/Shaders/XiFeiLi
+#     G:/Games/Fallout 4 ori/Fallout 4/Mo2/mods/TTS/Shaders/XiFeiLi
+#     I:/Games/Fallout 4 Pack/FO4SO_1.5/mods/TTS/Shaders/XiFeiLi
+#
+# set_hlsl_properties() compiles each .cso into path #1, then emits an UNGUARDED
+# POST_BUILD add_custom_command (inside `if(PATH_COUNT GREATER 1)`) that
+# mkdir+copy's it into paths #2 and #3. On CI those drives do not exist, so the
+# DLL links fine and then ninja dies with:
+#     Error creating directory "G:/Games/...": No such file or directory
+#
+# Fix: collapse the list to the single path the compiler actually writes to.
+# PATH_COUNT then equals 1, the `GREATER 1` branch never runs, and no copy
+# command is generated at all -- no need to touch the macro body.
+$cml = Join-Path $tts 'CMakeLists.txt'
+$cRaw = Get-Content $cml -Raw
+# Normalise line endings to LF first: the CI checkout is CRLF while the here-string
+# below is LF, so an un-normalised multi-line match silently fails.
+$c = $cRaw -replace "`r`n", "`n"
+$c0 = $c
+
+$c = $c.Replace(
+    'option(COPY_BUILD "Copy the build output to the Fallout 4 directory." ON)',
+    'option(COPY_BUILD "Copy the build output to the Fallout 4 directory." OFF)  # build shim: author-local paths, default OFF')
+
+$oldPaths = @'
+set(HLSL_OUTPUT_PATHS
+    "G:/Games/FO4_SO/mods/TTS True Through Scope/Shaders/XiFeiLi"
+    "G:/Games/Fallout 4 ori/Fallout 4/Mo2/mods/TTS/Shaders/XiFeiLi"
+	"I:/Games/Fallout 4 Pack/FO4SO_1.5/mods/TTS/Shaders/XiFeiLi"
+)
+'@
+$newPaths = @'
+# build shim: only the compile-output path is kept. The other two were absolute
+# paths on the author's machine; with a single entry PATH_COUNT == 1, so the
+# POST_BUILD copy loop below is never generated.
+set(HLSL_OUTPUT_PATHS
+    "${CMAKE_CURRENT_BINARY_DIR}/hlsl"
+)
+'@
+
+$c = $c.Replace($oldPaths, $newPaths)
+if ($c -eq $c0) {
+    throw 'CMakeLists.txt: neither COPY_BUILD nor HLSL_OUTPUT_PATHS pattern matched'
+}
+if ($c -match 'Fallout 4 ori') {
+    throw 'CMakeLists.txt: author-local path survived the patch'
+}
+Set-Content $cml -Value $c -NoNewline -Encoding utf8
+Write-Host '  [8c/9] CMakeLists.txt HLSL output paths -> single build-local dir'
+
 # NOTE: there is no NiFrustum member-rename step any more.
 # include/RE/NetImmerse/NiFrustum.h overrides the library header with members
 # named nearPlane/farPlane -- exactly what TTS's sources already write. This
