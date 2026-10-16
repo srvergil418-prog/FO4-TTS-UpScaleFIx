@@ -353,21 +353,31 @@ F4SE_EXPORT bool F4SEAPI F4SEPlugin_Load(const F4SE::LoadInterface* a_f4se)
 
 #endif
 
+	TTS_TRACE("LOAD-TRACE-01 before MH_Initialize");
 	auto mhInit = MH_Initialize();
+	TTS_TRACE("LOAD-TRACE-02 after MH_Initialize");
 	// MinHook
 	if (mhInit != MH_OK) {
 		logger::info("MH_Initialize Not Ok, Reason: {}", (int)mhInit);
 	}
 
+	TTS_TRACE("LOAD-TRACE-03 before D3DHooks::GetSingleton");
 	ThroughScope::d3dHooks = D3DHooks::GetSingleton();
+	TTS_TRACE("LOAD-TRACE-04 after D3DHooks::GetSingleton");
+	TTS_TRACE("LOAD-TRACE-05 before NIFLoader::GetSingleton");
 	ThroughScope::nifloader = NIFLoader::GetSingleton();
+	TTS_TRACE("LOAD-TRACE-06 after NIFLoader::GetSingleton");
 
 	logger::info("TrueThroughScope: Ninja!");
 	logger::info("TrueThroughScope: TrueThroughScope does NOT use AntTweakBar - any such errors are from other mods");
 
+	TTS_TRACE("LOAD-TRACE-07 before PreInit");
 	ThroughScope::d3dHooks->PreInit();
+	TTS_TRACE("LOAD-TRACE-08 after PreInit");
 
+	TTS_TRACE("LOAD-TRACE-09 before F4SE::Init");
 	F4SE::Init(a_f4se);
+	TTS_TRACE("LOAD-TRACE-10 after F4SE::Init");
 	// Register plugin for F4SE messages
 	const F4SE::MessagingInterface* message = F4SE::GetMessagingInterface();
 	if (!message) {
