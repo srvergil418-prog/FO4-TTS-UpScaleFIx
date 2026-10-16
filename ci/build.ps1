@@ -156,24 +156,68 @@ if ((Test-Path (Join-Path $clf4 ".git")) -and (Test-Path $clf4Inc)) {
     # 100%% valid for 1.10.163. Only these four differ; 1065542 and 775377 are
     # already correct on master.
     # ------------------------------------------------------------------
-    $iseFixes = @{
+    # ------------------------------------------------------------------
+    # master carries IDs from a NEWER runtime; many of them do not exist in
+    # the 1.10.163 address library. Replacement values come from
+    # powerof3/dev-1.10.163, whose ID table is 100% valid for 1.10.163.
+    # Pairing rule: within the same header, match the whole line with
+    # REL::ID(N) blanked out to REL::ID(#), then take the dev value.
+    #
+    # ONLY ids that are actually ODR-used at runtime are listed here. Most of
+    # master's stale ids sit in inline static / function-local statics that
+    # are never referenced, so they never initialise and never complain.
+    # Rewriting those blindly would risk mis-pairing, and a wrong address
+    # fails at RUNTIME (crash) instead of compile time -- much harder to
+    # diagnose. So we add ids one reported failure at a time.
+    # ------------------------------------------------------------------
+    $idFixes = @{
+        # --- RE/Bethesda/ImageSpaceEffect.h ---
+        # was: IDDB.cpp(127): id 2713225 not found!
         "2713225" = "372489"
         "2713237" = "1523708"
         "4784697" = "1500590"
-    }
-    $iseBefore = Get-Content $iseHdr -Raw
-    $iseAfter = $iseBefore
-    foreach ($bad in $iseFixes.Keys) {
-        $iseAfter = $iseAfter.Replace("REL::ID(" + $bad + ")", "REL::ID(" + $iseFixes[$bad] + ")")
-    }
-    if ($iseAfter -ne $iseBefore) {
-        Set-Content $iseHdr -Value $iseAfter -NoNewline -Encoding utf8
-        Write-Host "  patched ImageSpaceEffect.h REL::IDs (master -> 1.10.163 values)"
-    } else {
-        Write-Host "  ImageSpaceEffect.h: no stale IDs found (already patched?)" -ForegroundColor Yellow
+
+        # --- RE/Bethesda/Workshop.h ---
+        # was: IDDB.cpp(127): id 4797261 not found!
+        # inline REL::Relocation<PlacementItemData*> CurrentPlacementItemData
+        "2194970" = "905705"
+        "2194924" = "1583365"
+        "2195024" = "763948"
+        "4797261" = "1279207"
+        "4797160" = "833923"
+        "4797235" = "526727"
     }
 
-
+    # Files whose ids may need rewriting. Each is visited independently so a
+    # missing file (e.g. a master-only header that dev consolidated away) is
+    # simply skipped rather than fatal.
+    $idFixTargets = @(
+        "CommonLibF4/include/RE/Bethesda/ImageSpaceEffect.h",
+        "CommonLibF4/include/RE/Bethesda/Workshop.h"
+    )
+    $totalFixed = 0
+    foreach ($relPath in $idFixTargets) {
+        $tgt = Join-Path $clf4 $relPath
+        if (-not (Test-Path $tgt)) {
+            Write-Host ("    (absent, nothing to fix: " + $relPath) -ForegroundColor DarkGray
+            continue
+        }
+        $before = Get-Content $tgt -Raw
+        $after = $before
+        foreach ($bad in $idFixes.Keys) {
+            $after = $after.Replace("REL::ID(" + $bad + ")", "REL::ID(" + $idFixes[$bad] + ")")
+        }
+        if ($after -ne $before) {
+            Set-Content $tgt -Value $after -NoNewline -Encoding utf8
+            $n = 0
+            foreach ($bad in $idFixes.Keys) { if ($before.Contains("REL::ID(" + $bad + ")")) { $n++ } }
+            $totalFixed += $n
+            Write-Host ("    patched " + $n + " stale REL::ID in " + (Split-Path $relPath -Leaf))
+        } else {
+            Write-Host ("    no stale ids in " + (Split-Path $relPath -Leaf)) -ForegroundColor DarkGray
+        }
+    }
+    Write-Host ("  id repair: " + $totalFixed + " stale REL::ID replaced with 1.10.163 values")
     if (-not (Test-Path $iseHdr)) { throw "ImageSpaceEffect.h disappeared after the overlay" }
 
     $idsAfter = Get-RelIds $iseHdr
