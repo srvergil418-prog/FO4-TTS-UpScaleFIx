@@ -1198,14 +1198,15 @@ namespace ThroughScope {
 					}
 				}
 				char rtBuf[300];
-				auto rtState = RE::BSGraphics::State::GetSingleton();
+				// State::GetSingleton() returns a reference, not a pointer (same as L894).
+				const auto& rtState = RE::BSGraphics::State::GetSingleton();
 				sprintf_s(rtBuf,
 				          "ST-TRACE: RT4 WH=(%ux%u) | capturedScopeVp WH=(%.1fx%.1f) hasVp=%d | curVp WH=(%.1fx%.1f) count=%u | backBuffer=%ux%u",
 				          rt4W, rt4H,
 				          s_ScopeQuadOriginalViewport.Width, s_ScopeQuadOriginalViewport.Height, (int)s_HasScopeQuadViewport,
 				          oldViewports[0].Width, oldViewports[0].Height, (unsigned)numViewports,
-				          rtState ? (unsigned)rtState->backBufferWidth : 0u,
-				          rtState ? (unsigned)rtState->backBufferHeight : 0u);
+				          (unsigned)rtState.backBufferWidth,
+				          (unsigned)rtState.backBufferHeight);
 				TTS_TRACE(rtBuf);
 			}
 
