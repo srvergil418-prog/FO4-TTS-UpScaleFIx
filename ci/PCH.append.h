@@ -10,7 +10,7 @@
 // !! binary-verified definition.
 // ============================================================================
 
-#include <xmmintrin.h>   // __m128 (RendererShadowState::CameraData_t)
+#include <xmmintrin.h>   // __m128 (TTSShadowStatePlaceholder::CameraData_t)
 #include <cstddef>   // offsetof，供下面的偏移断言使用
 #include <vector>
 
@@ -309,9 +309,9 @@ namespace RE
 		const auto& world = a_camera->world;
 		const auto& frust = a_camera->viewFrustum;
 
-		const NiPoint3 forward{ world.rotate.entry[0].pt[0], world.rotate.entry[0].pt[1], world.rotate.entry[0].pt[2] };
-		const NiPoint3 up{ world.rotate.entry[1].pt[0], world.rotate.entry[1].pt[1], world.rotate.entry[1].pt[2] };
-		const NiPoint3 right{ world.rotate.entry[2].pt[0], world.rotate.entry[2].pt[1], world.rotate.entry[2].pt[2] };
+		const NiPoint3 forward{ world.rotate.entry[0][0], world.rotate.entry[0][1], world.rotate.entry[0][2] };
+		const NiPoint3 up{ world.rotate.entry[1][0], world.rotate.entry[1][1], world.rotate.entry[1][2] };
+		const NiPoint3 right{ world.rotate.entry[2][0], world.rotate.entry[2][1], world.rotate.entry[2][2] };
 		const NiPoint3& camPos = world.translate;
 
 		auto cross = [](const NiPoint3& a, const NiPoint3& b) {
@@ -557,18 +557,18 @@ BytePad<0x20> pad_580;         // 580
 	};
 
 	// ------------------------------------------------------------------------
-	// BSGraphics::RendererShadowState  and  BSGraphics::Context
+	// BSGraphics::TTSShadowStatePlaceholder  and  BSGraphics::TTSContextPlaceholder
 	//
-	// dev-1.10.163 only FORWARD-DECLARES RendererShadowState (BSGraphics.h:46)
+	// dev-1.10.163 only FORWARD-DECLARES TTSShadowStatePlaceholder (BSGraphics.h:46)
 	// and has no Context class at all -- both belong to the author private
 	// library. TTS reaches them like this (SecondPassRenderer.cpp:607-648):
 	//
 	//     uintptr_t contextPtr = <TLS slot 2848>;   // or DefaultContext
-	//     auto context = (RE::BSGraphics::Context*)contextPtr;
+	//     auto context = (RE::BSGraphics::TTSContextPlaceholder*)contextPtr;
 	//     ... context->shadowState.CameraData.viewProjMat[4]
 	//     ... context->shadowState.PosAdjust
 	//
-	// So Context must embed a RendererShadowState BY VALUE, and that state must
+	// So Context must embed a TTSShadowStatePlaceholder BY VALUE, and that state must
 	// expose CameraData (viewProjMat at +0x0D0) and PosAdjust at +0x210. Those
 	// offsets mirror CameraStateData and are the same numbers the earlier
 	// master-side header patch used.
@@ -579,7 +579,7 @@ BytePad<0x20> pad_580;         // 580
 	// ------------------------------------------------------------------------
 	namespace BSGraphics
 	{
-		class alignas(0x10) RendererShadowState
+		class alignas(0x10) TTSShadowStatePlaceholder
 		{
 		public:
 			struct CameraData_t
@@ -593,13 +593,13 @@ BytePad<0x20> pad_580;         // 580
 			CameraData_t CameraData;   // 000
 			NiPoint3     PosAdjust;    // 210
 		};
-		static_assert(offsetof(RendererShadowState, CameraData) == 0x000, "CameraData must be 0x000");
-		static_assert(offsetof(RendererShadowState, PosAdjust) == 0x210, "PosAdjust must be 0x210");
+		static_assert(offsetof(TTSShadowStatePlaceholder, CameraData) == 0x000, "CameraData must be 0x000");
+		static_assert(offsetof(TTSShadowStatePlaceholder, PosAdjust) == 0x210, "PosAdjust must be 0x210");
 
 		class Context
 		{
 		public:
-			RendererShadowState shadowState;   // 0000
+			TTSShadowStatePlaceholder shadowState;   // 0000
 		};
 		static_assert(offsetof(Context, shadowState) == 0x0000, "Context::shadowState must be 0x0000");
 	}
