@@ -170,12 +170,28 @@ if ((Test-Path (Join-Path $clf4 ".git")) -and (Test-Path $clf4Inc)) {
         "include/REL/Segment.h",
         "include/REL/Version.h"
     )
+    #
+    # PATH BUG FIX: $clf4 is the git repo ROOT (.../src/CommonLibF4) but the
+    # headers live one level deeper, under CommonLibF4/. Joining $clf4 with
+    # "include/..." therefore pointed at a nonexistent path and this loop
+    # always reported "dropped 0" -- which is exactly why NiPoint.h was still
+    # conflicting in CI. The ImageSpaceEffect.h check above works because it
+    # spells the path out in full.
+    #
     $dropped = 0
     foreach ($rel in $consolidated) {
-        $full = Join-Path $clf4 $rel
-        if (Test-Path $full) { Remove-Item $full -Force -ErrorAction SilentlyContinue; $dropped++ }
+        $full = Join-Path $clf4 ("CommonLibF4/" + $rel)
+        if (Test-Path $full) {
+            Remove-Item $full -Force -ErrorAction SilentlyContinue
+            $dropped++
+        } else {
+            Write-Host ("    (absent, nothing to drop: " + $rel) -ForegroundColor DarkGray
+        }
     }
     Write-Host ("  dropped " + $dropped + " master-only header(s) consolidated into dev files")
+    if ($dropped -eq 0) {
+        throw "consolidated-header cleanup removed nothing -- the path is wrong; NiPoint.h will still collide with NiPoint2/3.h"
+    }
 
     # A few files existed only so the old split headers could exist; if the
     # matching .cpp is gone the CMake list already excludes it, so nothing to do.
