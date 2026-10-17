@@ -1,8 +1,6 @@
 #include "SecondPassRenderer.h"
 #include "GlobalTypes.h"
 #include "HookManager.h"
-#include "TTSTrace.h"   // always-flushed trace: crash logs only give DLL+<rva>
-#include <cstdio>       // sprintf_s for the diagnostics
 
 #include "RenderTargetMerger.h"
 #include "RE/Bethesda/ImageSpaceManager.hpp"
@@ -49,24 +47,8 @@ namespace ThroughScope
 	bool SecondPassRenderer::ExecuteSecondPass()
 	{
 		if (!CanExecuteSecondPass()) {
-			// Silent per-frame failure. If the scope never becomes "ready" this is
-			// where every frame dies, which means the picture-in-picture never draws
-			// at all -- and the render path keeps spinning on the failure. Record the
-			// transition once so the trace shows whether the scope ever got ready.
-			static bool s_reportedNotReady = false;
-			if (!s_reportedNotReady) {
-				s_reportedNotReady = true;
-				TTS_TRACE("SP-TRACE: CanExecuteSecondPass=false -> second pass never runs (scope not ready)");
-			}
-			return false;
-		}
 
-		{
-			static bool s_reportedReady = false;
-			if (!s_reportedReady) {
-				s_reportedReady = true;
-				TTS_TRACE("SP-TRACE: CanExecuteSecondPass=true -> second pass executing");
-			}
+			return false;
 		}
 			
 		// 初始化相机指针
@@ -145,47 +127,28 @@ namespace ThroughScope
 
 	bool SecondPassRenderer::CanExecuteSecondPass() const
 	{
-		// Each early return here is silent, and the caller only logs a single
-		// "SecondPassRenderer failed" line. When this returns false every frame the
-		// picture-in-picture simply never draws -- while the render hook keeps
-		// spinning. Name the failing check once per session so the trace says which.
-		//
 		// 检查渲染状态
 		// 注意：移除了 IsEnableRender 检查，因为它在主线程设置，可能与渲染线程有竞争
 		if (!m_renderStateMgr->IsScopeReady() || !m_renderStateMgr->IsRenderReady()) {
-			static bool s1 = false;
-			if (!s1) { s1 = true;
-				char b[180];
-				sprintf_s(b, "SP-TRACE: blocked: IsScopeReady=%d IsRenderReady=%d",
-				          (int)m_renderStateMgr->IsScopeReady(), (int)m_renderStateMgr->IsRenderReady());
-				TTS_TRACE(b);
-			}
 			return false;
 		}
 
 		// 检查瞄具相机
 		auto scopeCamera = ScopeCamera::GetScopeCamera();
 		if (!scopeCamera || !scopeCamera->parent) {
-			static bool s2 = false;
-			if (!s2) { s2 = true;
-				TTS_TRACE(scopeCamera ? "SP-TRACE: blocked: scopeCamera has no parent"
-				                      : "SP-TRACE: blocked: scopeCamera is null");
-			}
 			return false;
 		}
 
 		// 检查玩家相机
 		auto playerCamera = *ptr_DrawWorldCamera;
 		if (!playerCamera) {
-			static bool s3 = false;
-			if (!s3) { s3 = true; TTS_TRACE("SP-TRACE: blocked: playerCamera is null"); }
+
 			return false;
 		}
 
 		// 检查D3D资源
 		if (!ValidateD3DResources()) {
-			static bool s4 = false;
-			if (!s4) { s4 = true; TTS_TRACE("SP-TRACE: blocked: ValidateD3DResources failed"); }
+
 			return false;
 		}
 		return true;
@@ -211,18 +174,8 @@ namespace ThroughScope
 		// 获取后缓冲纹理
 		// 优先从当前绑定的 RT 获取，如果不可用则使用 renderTargets[0] (SwapChain)
 		ID3D11Resource* rtResource = nullptr;
-
-		// [FIX] Priority 1: the main render target (RT4) — it holds the REAL internal
-		//       render resolution. Under upscaling (DLSS/FSR/XeSS) the swapchain (RT0)
-		//       carries the OUTPUT size, which is larger; choosing it made the temp
-		//       backbuffer twice as big, so the scope second pass only filled the
-		//       top-left quarter of its texture and the rest stayed black.
-		if (m_mainRTTexture) {
-			m_mainRTTexture->AddRef();  // 引用计数以匹配后续的 Release
-			m_rtTexture2D = m_mainRTTexture;
-		}
-
-		if (!m_rtTexture2D && m_savedRTVs[1]) {
+		
+		if (m_savedRTVs[1]) {
 			// TAA 阶段: RT slot 1 有绑定
 			m_savedRTVs[1]->GetResource(&rtResource);
 			if (rtResource != nullptr) {
@@ -642,7 +595,7 @@ namespace ThroughScope
 			}
 
 			if (contextPtr) {
-				auto context = (RE::BSGraphics::TTSContextPlaceholder*)contextPtr;
+				auto context = (RE::BSGraphics::Context*)contextPtr;
 				auto viewProjMat = context->shadowState.CameraData.viewProjMat;
 
 				// 保存当前矩阵到 "上一帧" 供下一帧 MV 计算使用
@@ -681,7 +634,7 @@ namespace ThroughScope
 			}
 
 			if (contextPtr) {
-				auto context = (RE::BSGraphics::TTSContextPlaceholder*)contextPtr;
+				auto context = (RE::BSGraphics::Context*)contextPtr;
 				backupPosAdjust = context->shadowState.PosAdjust;
 
 				// 设置 PosAdjust 为瞄具相机的世界位置
@@ -872,27 +825,29 @@ namespace ThroughScope
 					// 设置 viewport
 					D3D11_VIEWPORT viewport = {};
 					
-					// [FIX] The viewport MUST match the render target bound above.
-					//       targetWidth/targetHeight were read from that exact RTV in the
-					//       target-selection block, so they are always correct — with or
-					//       without upscaling.
-					//       Previously the Upscaling branch used the RT4 viewport instead,
-					//       but under upscaling we render into renderTargets[0] (the output
-					//       sized frame buffer). The viewport was therefore half the size of
-					//       the target, so the scope content only filled the top-left quarter
-					//       of the picture and everything else stayed black.
-					if (targetWidth == 0 || targetHeight == 0) {
-						auto rendererState = RE::BSGraphics::State::GetSingleton();
-						targetWidth  = rendererState.backBufferWidth;
-						targetHeight = rendererState.backBufferHeight;
+					auto scopeRenderMgr = ScopeRenderingManager::GetSingleton();
+					if (scopeRenderMgr->IsUpscalingActive()) {
+						// Upscaling 模式：必须使用 FirstPassViewport（动态分辨率）
+						// Upscaling 动态调整 viewport 大小，如 1129.4 x 635.3
+						if (!RenderUtilities::GetFirstPassViewport(viewport)) 
+						{
+							auto rendererState = RE::BSGraphics::State::GetSingleton();
+								viewport.TopLeftX = 0;
+								viewport.TopLeftY = 0;
+								viewport.Width = static_cast<float>(rendererState.backBufferWidth);
+								viewport.Height = static_cast<float>(rendererState.backBufferHeight);
+								viewport.MinDepth = 0.0f;
+								viewport.MaxDepth = 1.0f;	
+						}
+					} else {
+						// 非 Upscaling 模式：使用 targetWidth/Height
+						viewport.TopLeftX = 0;
+						viewport.TopLeftY = 0;
+						viewport.Width = static_cast<float>(targetWidth);
+						viewport.Height = static_cast<float>(targetHeight);
+						viewport.MinDepth = 0.0f;
+						viewport.MaxDepth = 1.0f;
 					}
-
-					viewport.TopLeftX = 0;
-					viewport.TopLeftY = 0;
-					viewport.Width  = static_cast<float>(targetWidth);
-					viewport.Height = static_cast<float>(targetHeight);
-					viewport.MinDepth = 0.0f;
-					viewport.MaxDepth = 1.0f;
 					
 					m_context->RSSetViewports(1, &viewport);
 					
