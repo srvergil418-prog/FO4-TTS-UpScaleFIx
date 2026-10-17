@@ -19,6 +19,42 @@ namespace ThroughScope
 	TESFormID ScopeCamera::s_EquippedWeaponFormID = 0;
 	NiNode* ScopeCamera::s_CurrentScopeNode = nullptr;
 
+	// ------------------------------------------------------------------------
+	// s_CurrentScopeNode 的并发保护
+	//
+	// 渲染线程每帧经 hkDrawTriShape -> GetScopeNodeIndexCount 遍历这棵节点树，
+	// 而切枪路径（SetupScopeForWeapon / CleanupScopeResources）会在另一条线程上
+	// 把它 DecRefCount 掉并换成新节点。原代码只是把指针复制到局部变量，注释还写着
+	// "使用局部变量避免潜在的竞态条件" —— 复制指针并不能让对象活着。
+	// 结果是渲染线程遍历已释放的节点，crashlog 落在 GetScopeNodeIndexCount +0x79。
+	//
+	// 函数内静态 mutex：避免静态初始化顺序问题，也不污染头文件的 ABI。
+	// ------------------------------------------------------------------------
+	std::mutex& ScopeCamera::ScopeNodeMutex()
+	{
+		static std::mutex s_mutex;
+		return s_mutex;
+	}
+
+	NiNode* ScopeCamera::AcquireScopeNode()
+	{
+		std::lock_guard<std::mutex> lock(ScopeNodeMutex());
+		NiNode* node = s_CurrentScopeNode;
+		if (node) {
+			node->IncRefCount();
+		}
+		return node;
+	}
+
+	void ScopeCamera::ReleaseScopeNode(NiNode* a_node)
+	{
+		if (!a_node) {
+			return;
+		}
+		std::lock_guard<std::mutex> lock(ScopeNodeMutex());
+		a_node->DecRefCount();
+	}
+
 	BGSKeyword* ScopeCamera::an_45 = nullptr;
 	BGSKeyword* ScopeCamera::AnimsXM2010_scopeKH45 = nullptr;
 	BGSKeyword* ScopeCamera::AnimsXM2010_scopeKM = nullptr;
@@ -115,9 +151,14 @@ namespace ThroughScope
 
 	void ScopeCamera::CleanupScopeResources()
 	{
-		if (s_CurrentScopeNode) {
-			s_CurrentScopeNode->DecRefCount();
-			s_CurrentScopeNode = nullptr;  // 重要：设置为nullptr避免悬空指针
+		// 与渲染线程的节点树遍历互斥：DecRefCount 归零会析构对象，
+		// 必须保证此刻没有人在遍历它。
+		{
+			std::lock_guard<std::mutex> lock(ScopeNodeMutex());
+			if (s_CurrentScopeNode) {
+				s_CurrentScopeNode->DecRefCount();
+				s_CurrentScopeNode = nullptr;
+			}
 		}
 
 		// 清理D3D相关资源
@@ -249,9 +290,12 @@ namespace ThroughScope
 		}
 
 		// Ensure static reference is cleared
-		if (s_CurrentScopeNode) {
-			s_CurrentScopeNode->DecRefCount();
-			s_CurrentScopeNode = nullptr;
+		{
+			std::lock_guard<std::mutex> lock(ScopeNodeMutex());
+			if (s_CurrentScopeNode) {
+				s_CurrentScopeNode->DecRefCount();
+				s_CurrentScopeNode = nullptr;
+			}
 		}
 
 		// 保存原始ZoomData值，用于后续恢复
@@ -264,7 +308,11 @@ namespace ThroughScope
 			if (scopeNode) {
 				// 设置节点名称，这对于后续查找至关重要
 				scopeNode->name = "TTSNode";
-				s_CurrentScopeNode = scopeNode;
+				// 发布新节点：同样在锁内，避免渲染线程读到半初始化的指针。
+				{
+					std::lock_guard<std::mutex> lock(ScopeNodeMutex());
+					s_CurrentScopeNode = scopeNode;
+				}
 				auto weaponnode = RE::PlayerCharacter::GetSingleton()->Get3D(true)->GetObjectByName("Weapon")->IsNode();
 				weaponnode->AttachChild(scopeNode, false);
 				scopeNode->local.translate = RE::NiPoint3(0, 0, 10);
@@ -325,30 +373,32 @@ namespace ThroughScope
 
 	int ScopeCamera::GetScopeNodeIndexCount()
 	{
-		// 使用局部变量避免潜在的竞态条件
-		auto* currentNode = s_CurrentScopeNode;
+		// 原实现把静态指针复制到局部变量，注释还写着"避免潜在的竞态条件"。
+		// 复制指针无法让对象活着：切枪路径可以在复制之后立刻 DecRefCount 归零并析构它，
+		// 于是这里遍历的就是已释放的内存（crashlog: 本函数 +0x79）。
+		// AcquireScopeNode 持有一份引用，直到本函数结束前对象都不会被销毁。
+		auto* currentNode = AcquireScopeNode();
 		if (!currentNode) {
-	
 			return -1;
 		}
 
+		int result = -1;
 		try {
 			auto* effectShape = currentNode->GetObjectByName("TTSEffectShape");
-			if (!effectShape) {
-				return -1;
+			if (effectShape) {
+				auto* triShape = effectShape->IsTriShape();
+				if (triShape) {
+					result = triShape->numTriangles * 3;
+				}
 			}
-
-			auto* triShape = effectShape->IsTriShape();
-			if (!triShape) {
-				return -1;
-			}
-
-			return triShape->numTriangles * 3;
 		}
 		catch (...) {
 			logger::error("Exception in GetScopeNodeIndexCount - returning -1");
-			return -1;
+			result = -1;
 		}
+
+		ReleaseScopeNode(currentNode);
+		return result;
 	}
 
 
