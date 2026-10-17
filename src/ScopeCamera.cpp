@@ -151,14 +151,46 @@ namespace ThroughScope
 
 	void ScopeCamera::CleanupScopeResources()
 	{
-		// 与渲染线程的节点树遍历互斥：DecRefCount 归零会析构对象，
-		// 必须保证此刻没有人在遍历它。
+		// 关键：先从武器节点上把旧节点摘下来，再释放引用。
+		//
+		// 原实现只做 DecRefCount + 置空静态指针，节点对象被销毁了，但它**仍然挂在
+		// Weapon 下面、名字还是 "TTSNode"**。于是切枪之后任何
+		//     weapon->GetObjectByName("TTSNode")
+		// 都会命中这个已释放的节点 —— 表现就是"切枪后 TTSNode 坏掉 / 检测不到"，
+		// 而手动按"重新加载"能恢复，因为那条路径第一步就是 DetachChild
+		// （见 CameraAdjustmentPanel::RemoveExistingTTSNode）。
+		NiNode* oldNode = nullptr;
 		{
 			std::lock_guard<std::mutex> lock(ScopeNodeMutex());
-			if (s_CurrentScopeNode) {
-				s_CurrentScopeNode->DecRefCount();
-				s_CurrentScopeNode = nullptr;
+			oldNode = s_CurrentScopeNode;
+			s_CurrentScopeNode = nullptr;
+		}
+
+		if (oldNode) {
+			// 摘挂载：必须在对象还活着的时候做，否则遍历武器子树会撞上死节点。
+			try {
+				auto* pc = RE::PlayerCharacter::GetSingleton();
+				if (pc && pc->Get3D()) {
+					auto* weaponObj = pc->Get3D()->GetObjectByName("Weapon");
+					if (weaponObj && weaponObj->IsNode()) {
+						auto* weaponNode = static_cast<RE::NiNode*>(weaponObj);
+						if (weaponNode->GetObjectByName("TTSNode") == oldNode) {
+							weaponNode->DetachChild(oldNode);
+							RE::NiUpdateData updateData{};
+							updateData.camera = GetScopeCamera();
+							if (updateData.camera) {
+								weaponNode->Update(updateData);
+							}
+						}
+					}
+				}
+			} catch (...) {
+				logger::warn("CleanupScopeResources: DetachChild failed, continuing");
 			}
+
+			// 与渲染线程的节点树遍历互斥：DecRefCount 归零会析构对象。
+			std::lock_guard<std::mutex> lock(ScopeNodeMutex());
+			oldNode->DecRefCount();
 		}
 
 		// 清理D3D相关资源
