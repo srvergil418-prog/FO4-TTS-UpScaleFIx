@@ -1156,15 +1156,26 @@ namespace ThroughScope {
 					const unsigned bbW = rs.backBufferWidth;
 					const unsigned bbH = rs.backBufferHeight;
 
-					logger::info(
-						"[DIAG viewport] captured={}x{} hasCaptured={} rt4={}x{} currentVp={}x{} backBuffer={}x{} upscalingActive={}",
+					// 直接写独立文件：spdlog 的 sink 在本工程里不一定及时 flush
+					char line[512];
+					sprintf_s(line,
+						"captured=%ux%u hasCaptured=%d rt4=%ux%u currentVp=%ux%u backBuffer=%ux%u upscaling=%d\r\n",
 						static_cast<unsigned>(s_ScopeQuadOriginalViewport.Width),
 						static_cast<unsigned>(s_ScopeQuadOriginalViewport.Height),
-						s_HasScopeQuadViewport,
+						s_HasScopeQuadViewport ? 1 : 0,
 						rt4W, rt4H,
 						static_cast<unsigned>(probeVp.Width), static_cast<unsigned>(probeVp.Height),
 						bbW, bbH,
-						srm ? srm->IsUpscalingActive() : false);
+						(srm && srm->IsUpscalingActive()) ? 1 : 0);
+
+					HANDLE hf = ::CreateFileA("E:\\Custom Fallout4\\tts-viewport.txt",
+						GENERIC_WRITE, FILE_SHARE_READ, nullptr,
+						CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+					if (hf != INVALID_HANDLE_VALUE) {
+						DWORD written = 0;
+						::WriteFile(hf, line, (DWORD)strlen(line), &written, nullptr);
+						::CloseHandle(hf);
+					}
 				}
 			}
 
