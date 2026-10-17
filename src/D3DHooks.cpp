@@ -1117,6 +1117,55 @@ namespace ThroughScope {
 			// 使用 RT4 作为渲染目标 (Upscaling 兼容)
 			// Upscaling MOD 从 RT4 复制数据，所以必须渲染到 RT4
 			ID3D11RenderTargetView* rt4RTV = (ID3D11RenderTargetView*)rendererData->renderTargets[4].rtView;
+
+			// ------------------------------------------------------------------
+			// [DIAG] 画幅诊断：把尺寸链打出来（每 120 帧一次，避免刷屏）
+			//
+			// 目的是回答一个问题：游戏绘制瞄具四边形时，当前 viewport 与 RT4 的
+			// 尺寸是否一致？
+			//   - 一致   => 顶点坐标空间与 RT 匹配，画幅应该正常
+			//   - 不一致 => viewport 变换把画面缩放到 RT 的左上角，画幅缩小/错位
+			//
+			// Upscaling(99130) 下作者这套能工作；Upscaling Custom(108772) 把
+			// RenderEffectRange 挪到 Late 阶段，此时 viewport 可能已被改回显示分辨率，
+			// 这个不一致就可能发生。先量数据再改，不猜。
+			// ------------------------------------------------------------------
+			{
+				static int s_diagTick = 0;
+				if ((s_diagTick++ % 120) == 0) {
+					D3D11_VIEWPORT probeVp = {};
+					UINT probeCount = 1;
+					pContext->RSGetViewports(&probeCount, &probeVp);
+
+					// RT4 的真实像素尺寸：从它的 RTV 描述里取，最可靠
+					D3D11_RENDER_TARGET_VIEW_DESC rtvDesc = {};
+					D3D11_TEXTURE2D_DESC texDesc = {};
+					UINT rt4W = 0, rt4H = 0;
+					if (rt4RTV) {
+						rt4RTV->GetDesc(&rtvDesc);
+						Microsoft::WRL::ComPtr<ID3D11Resource> res;
+						rt4RTV->GetResource(res.GetAddressOf());
+						Microsoft::WRL::ComPtr<ID3D11Texture2D> tex2d;
+						if (res && SUCCEEDED(res.As(&tex2d)) && tex2d) {
+							tex2d->GetDesc(&texDesc);
+							rt4W = texDesc.Width;
+							rt4H = texDesc.Height;
+						}
+					}
+
+					logger::info(
+						"[DIAG viewport] captured=({:.0f}x{:.0f}) hasCaptured={} rt4={}x{} currentVp=({:.0f}x{:.0f}) "
+						"backBuffer={}x{} screen={}x{} upscalingActive={}",
+						s_ScopeQuadOriginalViewport.Width, s_ScopeQuadOriginalViewport.Height,
+						s_HasScopeQuadViewport,
+						rt4W, rt4H,
+						probeVp.Width, probeVp.Height,
+						rendererData->backBufferWidth, rendererData->backBufferHeight,
+						rendererData->screenWidth, rendererData->screenHeight,
+						scopeRenderMgr->IsUpscalingActive());
+				}
+			}
+
 			
 			// 备份当前 RTV/DSV
 			Microsoft::WRL::ComPtr<ID3D11RenderTargetView> currentRTV;
