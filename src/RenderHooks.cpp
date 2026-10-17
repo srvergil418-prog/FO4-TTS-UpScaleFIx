@@ -592,7 +592,24 @@ namespace ThroughScope
 						D3DPERF_BeginEvent(0xFF00FFFF, L"TrueThroughScope_SecondPass");
 						SecondPassRenderer renderer(context, device, d3dHooks);
 						if (!renderer.ExecuteSecondPass()) {
-							logger::warn("[Render_PreUI Hook] SecondPassRenderer failed");
+							// This used to log on EVERY frame. With an upscaler active the
+							// second pass can fail persistently, which meant one string
+							// format + one disk flush per frame (spdlog is configured with
+							// flush_on(warn)) -- tens of thousands of heap operations per
+							// minute, right on the path that crashes inside std::string.
+							// Report the transition only: once when it starts failing, once
+							// when it recovers. Any real diagnosis can use those two lines.
+							static bool s_secondPassFailing = false;
+							if (!s_secondPassFailing) {
+								s_secondPassFailing = true;
+								logger::warn("[Render_PreUI Hook] SecondPassRenderer failed (will not repeat until it recovers)");
+							}
+						} else {
+							static bool s_reportedRecovery = false;
+							if (!s_reportedRecovery) {
+								s_reportedRecovery = true;
+								logger::info("[Render_PreUI Hook] SecondPassRenderer succeeded");
+							}
 						}
 
 						// Merge Render Targets
