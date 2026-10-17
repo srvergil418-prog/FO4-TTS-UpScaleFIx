@@ -203,8 +203,8 @@ namespace RE
 	// merely calls it. His IDs are plain immediates in his DLL (LoadNIF @0x86800
 	// era); recovered from the machine code:
 	//     mov ecx, 0x708                      ; sizeof(BSStream)
-	//     mov qword [rbp+7], 0x0F4162         ; REL::ID(999778)  = BSStream::Create
-	//     mov qword [rbp+7], 0x0A5A90         ; REL::ID(678544)  = BSStream::Load(const char*)
+	//     mov qword [rbp+7], 0x0F4162         ; REL::ID(999778)  = BSStream::Load  (initialized SECOND)
+	//     mov qword [rbp+7], 0x0A5A90         ; REL::ID(678544)  = BSStream::Create (initialized FIRST)
 	// Both resolve in version-1-10-163-0.bin, so we can call them directly and
 	// get a private node tree per load, exactly like the author's build.
 	// ------------------------------------------------------------------------
@@ -214,14 +214,14 @@ namespace RE
 		static BSStream* Create()
 		{
 			using func_t = BSStream* (*)();
-			static REL::Relocation<func_t> func{ REL::ID(999778) };
+			static REL::Relocation<func_t> func{ REL::ID(678544) };
 			return func();
 		}
 
 		bool Load(const char* a_fileName)
 		{
 			using func_t = bool (*)(BSStream*, const char*);
-			static REL::Relocation<func_t> func{ REL::ID(678544) };
+			static REL::Relocation<func_t> func{ REL::ID(999778) };
 			return func(this, a_fileName);
 		}
 
