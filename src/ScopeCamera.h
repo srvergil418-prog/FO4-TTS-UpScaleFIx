@@ -3,6 +3,8 @@
 #include "Constants.h"
 #include <RE/NetImmerse/NiCamera.hpp>
 
+#include <mutex>   // 保护 s_CurrentScopeNode：渲染线程遍历 vs 切枪时重建
+
 #include "DataPersistence.h"
 
 namespace ThroughScope
@@ -88,6 +90,21 @@ namespace ThroughScope
 
 		static RE::TESFormID s_EquippedWeaponFormID;
 		static RE::NiNode* s_CurrentScopeNode;
+
+		// s_CurrentScopeNode 由两方并发访问：
+		//   渲染线程：每帧经 hkDrawTriShape -> GetScopeNodeIndexCount 遍历节点树
+		//   切枪路径：SetupScopeForWeapon / CleanupScopeResources 销毁并重建它
+		//
+		// 原实现靠 `auto* currentNode = s_CurrentScopeNode;` 复制指针，注释还写着
+		// "使用局部变量避免潜在的竞态条件" —— 复制指针并不能让对象活着：
+		// DecRefCount() 归零会析构对象，渲染线程随后遍历的就是已释放的内存。
+		// crashlog 佐证：崩在 GetScopeNodeIndexCount +0x79（正在遍历节点树）。
+		//
+		// AcquireScopeNode 在锁内取指针并 IncRefCount()，保证调用者用毕之前对象不会
+		// 被销毁；必须与 ReleaseScopeNode 成对使用。
+		static RE::NiNode* AcquireScopeNode();
+		static void ReleaseScopeNode(RE::NiNode* a_node);
+		static std::mutex& ScopeNodeMutex();
 
 		static bool hasFirstSpawnNode;
 		static bool isDelayStarted;
