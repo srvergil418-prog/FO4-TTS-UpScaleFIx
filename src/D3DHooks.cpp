@@ -1214,11 +1214,40 @@ namespace ThroughScope {
 
 			Microsoft::WRL::ComPtr<ID3D11DepthStencilState> stencilWriteDSS;
 			if (SUCCEEDED(device->CreateDepthStencilState(&dssDesc, stencilWriteDSS.GetAddressOf()))) {
-				// 设置 viewport (关键：使用 scope quad 检测时捕获的原始 viewport)
-				// 这样顶点坐标变换与游戏原始渲染一致，即使 RT4 尺寸不同
-				// D3D11 的 viewport 变换会自动处理坐标映射
+				// 设置 viewport。
+				//
+				// 作者原来的做法是直接用游戏画瞄具时捕获的 viewport，注释里假设
+				// "D3D11 的 viewport 变换会自动处理坐标映射，即使 RT4 尺寸不同"。
+				// 实测（tts-viewport.txt）证明这个假设只在【原生渲染】下成立：
+				//     原生:  captured=3840x2160  rt4=3840x2160   -> 一致，正常
+				//     超分:  captured=1920x1080  rt4=3840x2160   -> 差 2 倍（面积 4 倍）
+				// 超分会把渲染分辨率降下来（这里 4K -> 1080p），游戏画四边形时用的是
+				// 缩放后的坐标系，而我们渲染到全分辨率的 RT4 —— 于是画中画只占 RT4
+				// 左上角四分之一。这就是"开超分后画幅错位"的根因。
+				//
+				// 修法：viewport 按 RT4 / captured 的比例缩放，让整个 RT4 都被覆盖。
+				// 只在两者不一致时缩放，一致时保持原样（原生渲染完全不受影响）。
 				if (s_HasScopeQuadViewport) {
-					pContext->RSSetViewports(1, &s_ScopeQuadOriginalViewport);
+					D3D11_VIEWPORT vp = s_ScopeQuadOriginalViewport;
+					if (rt4W > 0 && rt4H > 0 &&
+						vp.Width > 0.0f && vp.Height > 0.0f &&
+						(static_cast<UINT>(vp.Width + 0.5f) != rt4W || static_cast<UINT>(vp.Height + 0.5f) != rt4H)) {
+						const float sx = static_cast<float>(rt4W) / vp.Width;
+						const float sy = static_cast<float>(rt4H) / vp.Height;
+						vp.TopLeftX *= sx;
+						vp.TopLeftY *= sy;
+						vp.Width *= sx;
+						vp.Height *= sy;
+						static int s_scaleLog = 0;
+						if ((s_scaleLog++ % 120) == 0) {
+							logger::info("[viewport scale] captured={}x{} rt4={}x{} -> scaled={}x{}",
+								static_cast<unsigned>(s_ScopeQuadOriginalViewport.Width),
+								static_cast<unsigned>(s_ScopeQuadOriginalViewport.Height),
+								rt4W, rt4H,
+								static_cast<unsigned>(vp.Width), static_cast<unsigned>(vp.Height));
+						}
+					}
+					pContext->RSSetViewports(1, &vp);
 				}
 				
 				// 绑定 RT4 + 支持 stencil 的 DSV
