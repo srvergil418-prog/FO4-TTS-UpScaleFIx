@@ -710,15 +710,13 @@ if ($sp3 -eq $sp2) { throw 'SecondPassRenderer: SetCameraData block not found' }
 # (c) Renderer::GetSingleton().SetPosAdjust(...) -- write the value through the
 #     Context we already hold (the line above reads it back the same way).
 $sp4 = $sp3.Replace(
-    "				RE::BSGraphics::Renderer::GetSingleton().SetPosAdjust(&scopePosAdjust);",
-    "				// [TTS CI] SUSPECT UNDER TEST: this is the only place where we`r`n" +
-    "				// compute an offset ourselves and write straight into the render`r`n" +
-    "				// context. A wrong offset scribbles over the renderer's own state,`r`n" +
-    "				// and the crash logs put the fault inside d3d11.dll reached from the`r`n" +
-    "				// second pass -- which fits that. PosAdjust only shifts the weapon`r`n" +
-    "				// model for parallax, so skipping it costs at most a slight gun`r`n" +
-    "				// offset. Restore if crashes continue (that clears this suspect).`r`n" +
-    "				(void)scopePosAdjust;")
+    "`t`t`t`tRE::BSGraphics::Renderer::GetSingleton().SetPosAdjust(&scopePosAdjust);",
+    "`t`t`t`t// PosAdjust MUST actually be written. Skipping it (the old suspect test)`r`n" +
+    "`t`t`t`t// left the scope camera position unsynced, so the sky and the scope picture`r`n" +
+    "`t`t`t`t// were projected with a stale matrix -- user saw the TTS image floating above`r`n" +
+    "`t`t`t`t// their head with the frame gone. Offset chain: 0x2240 (shadowState)`r`n" +
+    "`t`t`t`t// + 0x210 (PosAdjust inside CameraStateData).`r`n" +
+    "`t`t`t`tcontext->shadowState.PosAdjust = scopePosAdjust;")
 if ($sp4 -eq $sp3) { throw 'SecondPassRenderer: Renderer::GetSingleton block not found' }
 
 Set-Content $spr -Value $sp4 -NoNewline -Encoding utf8
