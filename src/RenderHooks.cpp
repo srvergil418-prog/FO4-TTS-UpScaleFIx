@@ -739,7 +739,22 @@ namespace ThroughScope
 		// 当玩家处于隐身状态时，禁用 scope 渲染相关的几何体过滤以避免 D3D11 崩溃
 		g_scopeRenderMgr->UpdateChameleonStatus();
 
-		auto weaponInfo = DataPersistence::GetCurrentWeaponInfo();
+		// GetCurrentWeaponInfo() returns a WeaponInfo BY VALUE and, on the way, walks
+		// the player's whole inventory and builds several std::strings. Doing that
+		// every single frame means dozens of string allocations/frees per frame,
+		// which is exactly the kind of heap churn that turns a latent bug into the
+		// "crash inside std::string / std::format" we keep seeing -- and weapon
+		// swaps add a setup thread tearing down render nodes on top of it.
+		//
+		// The data only changes when the equipped weapon changes, so refresh it
+		// every 15th frame (~0.25s at 60fps) instead. A swap is still picked up
+		// within a quarter second, which is far below the human-noticeable delay.
+		static DataPersistence::WeaponInfo s_cachedWeaponInfo{};
+		static std::uint32_t            s_weaponInfoTick = 0;
+		if (s_weaponInfoTick++ % 15 == 0) {
+			s_cachedWeaponInfo = DataPersistence::GetCurrentWeaponInfo();
+		}
+		auto& weaponInfo = s_cachedWeaponInfo;
 
 		auto enbIntegration = ENBIntegration::GetSingleton();
 
