@@ -327,7 +327,10 @@ namespace ThroughScope
 
 		// Clean up potentially existing old model to prevent duplicate generation
 		if (auto player = RE::PlayerCharacter::GetSingleton()) {
-			if (auto root = player->Get3D(true)) {
+			// 用 Get3D() 而不是 Get3D(true)：检测侧 ImGuiManager::GetTTSNode 与手动加载
+			// CreateTTSNodeFromNIF 都在 Get3D() 下查找/挂载 Weapon/TTSNode。两边用不同
+			// 的 3D 节点时，切枪后第一人称与第三人称武器子树会分开，菜单就显示无 TTSNode。
+			if (auto root = player->Get3D()) {
 				if (auto weaponObj = root->GetObjectByName("Weapon")) {
 					if (auto weaponNode = weaponObj->IsNode()) {
 						if (auto existingNode = weaponNode->GetObjectByName("TTSNode")) {
@@ -364,7 +367,9 @@ namespace ThroughScope
 				// 读到尚未挂接好的子节点指针 —— crashlog 正是落在 GetScopeNodeIndexCount
 				// （先是 +0x79，加了锁之后变成 +0xBB；函数没变，说明对象活着、内容还是坏的）。
 				// 发布推迟到本块末尾（ApplyScopeTransform 之后）。
-				auto weaponnode = RE::PlayerCharacter::GetSingleton()->Get3D(true)->GetObjectByName("Weapon")->IsNode();
+				// 挂到与检测/手动路径相同的 3D 节点 Get3D()，否则切枪后挂上去的 TTSNode
+				// 不在检测所查的那棵子树里，菜单就会显示无 TTSNode。
+				auto weaponnode = RE::PlayerCharacter::GetSingleton()->Get3D()->GetObjectByName("Weapon")->IsNode();
 				weaponnode->AttachChild(scopeNode, false);
 				scopeNode->local.translate = RE::NiPoint3(0, 0, 10);
 				scopeNode->local.rotate.MakeIdentity();
