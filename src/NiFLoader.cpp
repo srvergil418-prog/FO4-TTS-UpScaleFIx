@@ -35,7 +35,27 @@ namespace
 		args.loadTextures = 1;
 		args.performProcess = 1;
 		(void)RE::BSModelDB::Demand(a_path, &model, args);
-		return model.get();
+
+		RE::NiNode* node = model.get();
+		if (node) {
+			// CRITICAL: take our own reference before `model` goes out of scope.
+			//
+			// NiPointer is a ref-counting smart pointer: on return it destructs and
+			// drops the only reference Demand handed us, destroying the node. The raw
+			// pointer we used to return therefore dangled, and everything downstream
+			// worked on freed memory:
+			//   - the first aim looked correct because nothing had reused that block
+			//   - after a weapon swap the block got recycled, the node's vtable was
+			//     overwritten, and GetObjectByName's `call [vtable+0x170]` faulted
+			//     (crashlog: GetScopeNodeIndexCount +0xBB)
+			// It also explains why the mutex/refcount work on s_CurrentScopeNode fixed
+			// nothing: that guards the *variable*, not a dead object.
+			//
+			// The caller now owns this reference and releases it with DecRefCount in
+			// CleanupScopeResources (and when republishing a new node).
+			node->IncRefCount();
+		}
+		return node;
 	}
 }
 
