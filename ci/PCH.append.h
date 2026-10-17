@@ -188,18 +188,57 @@ namespace RE
 	// NIFLoader::LoadNIF return nullptr. That disables the custom-scope-model
 	// feature (unrelated to the upscaling fix) instead of failing to link.
 	// ------------------------------------------------------------------------
+	// ------------------------------------------------------------------------
+	// BSStream -- the REAL engine class, driven through REL::ID.
+	//
+	// This used to be a fake whose Load() always returned false, which made
+	// NIFLoader::LoadNIF return nullptr forever ("no TTSNode / not loaded").
+	// It was replaced by BSModelDB::Demand -- but Demand hands back a SHARED
+	// instance from the model cache, so attaching it to a weapon and detaching
+	// it again affected every user of that model. That is why, unlike the
+	// author's build, TTSNode misbehaved after weapon swaps (vanished, ended up
+	// on another subtree, or accumulated several copies floating in the sky).
+	//
+	// The author does NOT have a private loader -- BSStream is engine code and he
+	// merely calls it. His IDs are plain immediates in his DLL (LoadNIF @0x86800
+	// era); recovered from the machine code:
+	//     mov ecx, 0x708                      ; sizeof(BSStream)
+	//     mov qword [rbp+7], 0x0F4162         ; REL::ID(999778)  = BSStream::Create
+	//     mov qword [rbp+7], 0x0A5A90         ; REL::ID(678544)  = BSStream::Load(const char*)
+	// Both resolve in version-1-10-163-0.bin, so we can call them directly and
+	// get a private node tree per load, exactly like the author's build.
+	// ------------------------------------------------------------------------
 	class BSStream
 	{
 	public:
-		static BSStream* Create() { return new BSStream(); }
+		static BSStream* Create()
+		{
+			using func_t = BSStream* (*)();
+			static REL::Relocation<func_t> func{ REL::ID(999778) };
+			return func();
+		}
 
-		// The engine loader is unavailable. Reporting failure is the honest
-		// option: callers log an error and bail out cleanly.
-		bool Load(const char*) { return false; }
+		bool Load(const char* a_fileName)
+		{
+			using func_t = bool (*)(BSStream*, const char*);
+			static REL::Relocation<func_t> func{ REL::ID(678544) };
+			return func(this, a_fileName);
+		}
 
-		// NIFLoader reads topObjects[0] after a successful Load() only, but the
-		// expression still has to compile, so provide a benign container.
-		std::vector<NiPointer<NiObject>> topObjects;
+		// topObjects[0] after a successful Load().
+		//   NiStream::topObjects        @ +0x358  (NiTLargeObjectArray<NiPointer<NiObject>>)
+		//   NiTLargeArray::_data        @ +0x08   (pointer to the element array)
+		// Elements are NiPointer<NiObject>, i.e. a single NiObject* per slot.
+		NiNode* GetTopLevelNode() const
+		{
+			auto* base = reinterpret_cast<const char*>(this) + 0x358;
+			auto* data = *reinterpret_cast<void* const*>(base + 0x08);
+			if (!data) {
+				return nullptr;
+			}
+			auto* obj = *reinterpret_cast<NiObject* const*>(data);
+			return obj ? static_cast<NiNode*>(obj) : nullptr;
+		}
 	};
 }
 
