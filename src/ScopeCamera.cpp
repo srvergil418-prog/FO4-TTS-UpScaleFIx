@@ -308,11 +308,13 @@ namespace ThroughScope
 			if (scopeNode) {
 				// 设置节点名称，这对于后续查找至关重要
 				scopeNode->name = "TTSNode";
-				// 发布新节点：同样在锁内，避免渲染线程读到半初始化的指针。
-				{
-					std::lock_guard<std::mutex> lock(ScopeNodeMutex());
-					s_CurrentScopeNode = scopeNode;
-				}
+				// 注意：这里绝对不能提前把 scopeNode 发布到 s_CurrentScopeNode。
+				// 下面还要 AttachChild / 设 local transform / Update / ApplyScopeTransform，
+				// 而渲染线程每帧经 hkDrawTriShape -> GetScopeNodeIndexCount 遍历这棵树。
+				// 一旦提前发布，它就会在一棵"半初始化"的树上做 GetObjectByName，
+				// 读到尚未挂接好的子节点指针 —— crashlog 正是落在 GetScopeNodeIndexCount
+				// （先是 +0x79，加了锁之后变成 +0xBB；函数没变，说明对象活着、内容还是坏的）。
+				// 发布推迟到本块末尾（ApplyScopeTransform 之后）。
 				auto weaponnode = RE::PlayerCharacter::GetSingleton()->Get3D(true)->GetObjectByName("Weapon")->IsNode();
 				weaponnode->AttachChild(scopeNode, false);
 				scopeNode->local.translate = RE::NiPoint3(0, 0, 10);
@@ -328,6 +330,14 @@ namespace ThroughScope
 
 				// 应用变换
 				ApplyScopeTransform(scopeNode, config.cameraAdjustments);
+
+				// 到这里节点才真正就绪（挂接、变换、Update、调整全部完成），此时才发布。
+				// 渲染线程要么还看不到它（继续用旧值或 nullptr），要么看到一个完整的树，
+				// 不会再撞上"半初始化"的中间态。
+				{
+					std::lock_guard<std::mutex> lock(ScopeNodeMutex());
+					s_CurrentScopeNode = scopeNode;
+				}
 
 			} else {
 				logger::error("Failed to load scope model: {}", config.modelName);
