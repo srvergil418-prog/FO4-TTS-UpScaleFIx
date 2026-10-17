@@ -1118,6 +1118,20 @@ namespace ThroughScope {
 			// Upscaling MOD 从 RT4 复制数据，所以必须渲染到 RT4
 			ID3D11RenderTargetView* rt4RTV = (ID3D11RenderTargetView*)rendererData->renderTargets[4].rtView;
 
+			// RT4 的真实像素尺寸（诊断和下面的 viewport 缩放都要用，所以放外层）
+			UINT rt4W = 0, rt4H = 0;
+			if (rt4RTV) {
+				Microsoft::WRL::ComPtr<ID3D11Resource> rt4Res;
+				rt4RTV->GetResource(rt4Res.GetAddressOf());
+				Microsoft::WRL::ComPtr<ID3D11Texture2D> rt4Tex2d;
+				if (rt4Res && SUCCEEDED(rt4Res.As(&rt4Tex2d)) && rt4Tex2d) {
+					D3D11_TEXTURE2D_DESC rt4Desc = {};
+					rt4Tex2d->GetDesc(&rt4Desc);
+					rt4W = rt4Desc.Width;
+					rt4H = rt4Desc.Height;
+				}
+			}
+
 			// ------------------------------------------------------------------
 			// [DIAG] 画幅诊断：把尺寸链打出来（每 120 帧一次，避免刷屏）
 			//
@@ -1137,20 +1151,7 @@ namespace ThroughScope {
 					UINT probeCount = 1;
 					pContext->RSGetViewports(&probeCount, &probeVp);
 
-					// RT4 的真实像素尺寸：从它的纹理描述里取，最可靠
-					UINT rt4W = 0, rt4H = 0;
-					if (rt4RTV) {
-						Microsoft::WRL::ComPtr<ID3D11Resource> res;
-						rt4RTV->GetResource(res.GetAddressOf());
-						Microsoft::WRL::ComPtr<ID3D11Texture2D> tex2d;
-						if (res && SUCCEEDED(res.As(&tex2d)) && tex2d) {
-							D3D11_TEXTURE2D_DESC texDesc = {};
-							tex2d->GetDesc(&texDesc);
-							rt4W = texDesc.Width;
-							rt4H = texDesc.Height;
-						}
-					}
-
+					// rt4W/rt4H 已在外层算好，这里直接用
 					auto rs = RE::BSGraphics::State::GetSingleton();
 					auto* srm = ScopeRenderingManager::GetSingleton();
 					const unsigned bbW = rs.backBufferWidth;
