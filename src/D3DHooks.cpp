@@ -1151,10 +1151,10 @@ namespace ThroughScope {
 						}
 					}
 
-					auto* rs = RE::BSGraphics::State::GetSingleton();
+					auto rs = RE::BSGraphics::State::GetSingleton();
 					auto* srm = ScopeRenderingManager::GetSingleton();
-					const unsigned bbW = rs ? rs->backBufferWidth : 0u;
-					const unsigned bbH = rs ? rs->backBufferHeight : 0u;
+					const unsigned bbW = rs.backBufferWidth;
+					const unsigned bbH = rs.backBufferHeight;
 
 					logger::info(
 						"[DIAG viewport] captured={}x{} hasCaptured={} rt4={}x{} currentVp={}x{} backBuffer={}x{} upscalingActive={}",
