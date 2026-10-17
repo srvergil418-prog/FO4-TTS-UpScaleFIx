@@ -848,7 +848,7 @@ namespace ThroughScope
 			return;
 		}
 
-		auto context = (RE::BSGraphics::Context*)contextPtr;
+		auto context = (RE::BSGraphics::TTSContextPlaceholder*)contextPtr;
 		auto& cameraData = context->shadowState.CameraData;
 
 		// 备份当前的投影矩阵（这是被主相机覆盖的错误矩阵）
