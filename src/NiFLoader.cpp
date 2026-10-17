@@ -123,9 +123,18 @@ NiNode* NIFLoader::LoadNIF(const char* filePath)
 {
 	ProbeRelocations();
 
-	NiNode* rootNode = LoadModelViaModelDB(filePath);
+	BSStream* stream = BSStream::Create();
+	if (!stream) {
+		logger::error("Failed to create BSStream for: {}", filePath);
+		return nullptr;
+	}
+	if (!stream->Load(filePath)) {
+		logger::error("Failed to load NIF file via BSStream: {}", filePath);
+		return nullptr;
+	}
+	NiNode* rootNode = stream->GetTopLevelNode();
 	if (!rootNode) {
-		logger::error("Failed to load NIF file: {}", filePath);
+		logger::error("Failed to get root NiNode: {}", filePath);
 		return nullptr;
 	}
 	return rootNode;
