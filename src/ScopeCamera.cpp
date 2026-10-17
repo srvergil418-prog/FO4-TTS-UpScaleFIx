@@ -29,6 +29,16 @@ namespace ThroughScope
 		return s_mutex;
 	}
 
+	std::recursive_mutex& ScopeCamera::ScopeRebuildMutex()
+	{
+		// Deliberately separate from ScopeNodeMutex. That one is a fine-grained
+		// guard for the static pointer; this one serialises whole
+		// rebuild-vs-render sections. Merging them would make the render path hold
+		// a lock across engine calls that may re-enter the same helpers.
+		static std::recursive_mutex s_mutex;
+		return s_mutex;
+	}
+
 	RE::NiNode* ScopeCamera::AcquireScopeNode()
 	{
 		std::lock_guard<std::mutex> lock(ScopeNodeMutex());
@@ -160,6 +170,12 @@ namespace ThroughScope
 
 	void ScopeCamera::CleanupScopeResources()
 	{
+		// Whole-function rebuild lock: this tears the node out of the weapon's tree
+		// (or drops the last reference), which must not overlap the render thread
+		// walking that same tree. Take the big lock first, then the fine-grained
+		// pointer lock -- always in this order, so the two never deadlock.
+		std::lock_guard<std::recursive_mutex> rebuildLock(ScopeRebuildMutex());
+
 		// Take the lock so the render thread cannot be inside AcquireScopeNode at
 		// the same moment we drop the reference and null the static. Without it the
 		// render thread could hold a pointer to a node this call just destroyed.
@@ -278,6 +294,12 @@ namespace ThroughScope
 
 	void ScopeCamera::SetupScopeForWeapon(const DataPersistence::WeaponInfo& weaponInfo)
 	{
+		// Serialise against the render thread's node walk. This function mutates the
+		// node tree (name, transform, weaponNode->AttachChild, Update); a concurrent
+		// traversal would read children mid-mutation and fault. Held for the whole
+		// rebuild -- it is a rare event, so the cost is irrelevant next to a crash.
+		std::lock_guard<std::recursive_mutex> rebuildLock(ScopeRebuildMutex());
+
 		auto nifLoader = NIFLoader::GetSingleton();
 		if (!weaponInfo.currentConfig) {
 			logger::warn("No configuration provided for scope setup");
@@ -396,6 +418,12 @@ namespace ThroughScope
 		//
 		// AcquireScopeNode holds a reference for as long as we need it, so the node
 		// cannot be destroyed underneath this call.
+		//
+		// On top of that, hold the rebuild lock for the whole walk: keeping the
+		// object alive is not enough if a rebuild is concurrently re-parenting its
+		// children. This is the render thread's only traversal of the scope node, so
+		// taking the big lock here is what actually serialises render vs rebuild.
+		std::lock_guard<std::recursive_mutex> rebuildLock(ScopeRebuildMutex());
 		auto* currentNode = AcquireScopeNode();
 		if (!currentNode) {
 			return -1;
