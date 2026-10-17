@@ -213,17 +213,39 @@ namespace RE
 	public:
 		static BSStream* Create()
 		{
-			using func_t = BSStream* (*)();
-			static REL::Relocation<func_t> func{ REL::ID(678544) };
-			return func();
-		}
+			// Create() 在作者版本里是被【内联】的 —— 他的 LoadNIF 里有
+			//     mov ecx, 0x708 ; call operator new
+			// 也就是说 Create == new sizeof(BSStream) + 调用构造函数。
+			//
+			// 运行时探测（tts-probe.txt 的 head24）证实了这点：
+			//   ID 999778 的开头:  push rbx / sub rsp,0x20 / mov rbx,rcx /
+			//                      lea rax,[rip+vtable] / mov [rbx],rax
+			//     => 这是【构造函数】（正在设置 vtable），不是 Create
+			//   ID 678544 的开头:  xor r8d,r8d / jmp rel32
+			//     => 这是【转发 thunk】：Load(const char*) 把第 3 个参数置空，
+			//        跳到 3 参数版 ID 160035（那边开头是完整 prolog，TTS 正是
+			//        hook 这个 3 参数版）
+			//
+			// 所以正确做法：手工 new 0x708 字节 + 调 999778 的构造函数；
+			// Load 走 678544 这个单参数 thunk。
+			static BSStream* Create()
+			{
+				void* mem = ::operator new(0x708);
+				if (!mem) {
+					return nullptr;
+				}
+				using ctor_t = void (*)(void*);
+				static REL::Relocation<ctor_t> ctor{ REL::ID(999778) };
+				ctor(mem);
+				return static_cast<BSStream*>(mem);
+			}
 
-		bool Load(const char* a_fileName)
-		{
-			using func_t = bool (*)(BSStream*, const char*);
-			static REL::Relocation<func_t> func{ REL::ID(999778) };
-			return func(this, a_fileName);
-		}
+			bool Load(const char* a_fileName)
+			{
+				using func_t = bool (*)(BSStream*, const char*);
+				static REL::Relocation<func_t> func{ REL::ID(678544) };
+				return func(this, a_fileName);
+			}
 
 		// topObjects[0] after a successful Load().
 		//   NiStream::topObjects        @ +0x358  (NiTLargeObjectArray<NiPointer<NiObject>>)
