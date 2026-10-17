@@ -19,61 +19,6 @@ namespace ThroughScope
 	TESFormID ScopeCamera::s_EquippedWeaponFormID = 0;
 	NiNode* ScopeCamera::s_CurrentScopeNode = nullptr;
 
-	// Guards s_CurrentScopeNode against the setup thread tearing it down while the
-	// render thread is still using it. See ScopeCamera.h for the full rationale.
-	std::mutex& ScopeCamera::ScopeNodeMutex()
-	{
-		// Function-local static: avoids static-init-order problems and keeps the
-		// mutex out of the header's ABI surface.
-		static std::mutex s_mutex;
-		return s_mutex;
-	}
-
-	std::recursive_mutex& ScopeCamera::ScopeRebuildMutex()
-	{
-		// Deliberately separate from ScopeNodeMutex. That one is a fine-grained
-		// guard for the static pointer; this one serialises whole
-		// rebuild-vs-render sections. Merging them would make the render path hold
-		// a lock across engine calls that may re-enter the same helpers.
-		static std::recursive_mutex s_mutex;
-		return s_mutex;
-	}
-
-	RE::NiNode* ScopeCamera::AcquireScopeNode()
-	{
-		std::lock_guard<std::mutex> lock(ScopeNodeMutex());
-		RE::NiNode* node = s_CurrentScopeNode;
-		if (node) {
-			// Hold our own reference so CleanupScopeResources' DecRefCount cannot
-			// delete the node underneath the caller.
-			node->IncRefCount();
-		}
-		return node;
-	}
-
-	void ScopeCamera::ReleaseScopeNode(RE::NiNode* a_node)
-	{
-		if (a_node) {
-			a_node->DecRefCount();
-		}
-	}
-
-	void ScopeCamera::PublishScopeNode(RE::NiNode* a_node)
-	{
-		std::lock_guard<std::mutex> lock(ScopeNodeMutex());
-
-		// Release the node we are replacing (the old code just overwrote the
-		// pointer, leaking it and leaving readers pointing at a node nobody owned).
-		if (s_CurrentScopeNode && s_CurrentScopeNode != a_node) {
-			s_CurrentScopeNode->DecRefCount();
-		}
-
-		// Take over the caller's reference. Doing this under the lock means a
-		// render-thread AcquireScopeNode sees either the old node or the new one,
-		// never a half-swapped state.
-		s_CurrentScopeNode = a_node;
-	}
-
 	BGSKeyword* ScopeCamera::an_45 = nullptr;
 	BGSKeyword* ScopeCamera::AnimsXM2010_scopeKH45 = nullptr;
 	BGSKeyword* ScopeCamera::AnimsXM2010_scopeKM = nullptr;
@@ -170,21 +115,9 @@ namespace ThroughScope
 
 	void ScopeCamera::CleanupScopeResources()
 	{
-		// Whole-function rebuild lock: this tears the node out of the weapon's tree
-		// (or drops the last reference), which must not overlap the render thread
-		// walking that same tree. Take the big lock first, then the fine-grained
-		// pointer lock -- always in this order, so the two never deadlock.
-		std::lock_guard<std::recursive_mutex> rebuildLock(ScopeRebuildMutex());
-
-		// Take the lock so the render thread cannot be inside AcquireScopeNode at
-		// the same moment we drop the reference and null the static. Without it the
-		// render thread could hold a pointer to a node this call just destroyed.
-		{
-			std::lock_guard<std::mutex> lock(ScopeNodeMutex());
-			if (s_CurrentScopeNode) {
-				s_CurrentScopeNode->DecRefCount();
-				s_CurrentScopeNode = nullptr;  // 重要：设置为nullptr避免悬空指针
-			}
+		if (s_CurrentScopeNode) {
+			s_CurrentScopeNode->DecRefCount();
+			s_CurrentScopeNode = nullptr;  // 重要：设置为nullptr避免悬空指针
 		}
 
 		// 清理D3D相关资源
@@ -294,12 +227,6 @@ namespace ThroughScope
 
 	void ScopeCamera::SetupScopeForWeapon(const DataPersistence::WeaponInfo& weaponInfo)
 	{
-		// Serialise against the render thread's node walk. This function mutates the
-		// node tree (name, transform, weaponNode->AttachChild, Update); a concurrent
-		// traversal would read children mid-mutation and fault. Held for the whole
-		// rebuild -- it is a rare event, so the cost is irrelevant next to a crash.
-		std::lock_guard<std::recursive_mutex> rebuildLock(ScopeRebuildMutex());
-
 		auto nifLoader = NIFLoader::GetSingleton();
 		if (!weaponInfo.currentConfig) {
 			logger::warn("No configuration provided for scope setup");
@@ -321,14 +248,10 @@ namespace ThroughScope
 			}
 		}
 
-		// Ensure static reference is cleared (under the same lock as the render-side
-		// acquire, so nobody can be handed this node mid-teardown).
-		{
-			std::lock_guard<std::mutex> lock(ScopeNodeMutex());
-			if (s_CurrentScopeNode) {
-				s_CurrentScopeNode->DecRefCount();
-				s_CurrentScopeNode = nullptr;
-			}
+		// Ensure static reference is cleared
+		if (s_CurrentScopeNode) {
+			s_CurrentScopeNode->DecRefCount();
+			s_CurrentScopeNode = nullptr;
 		}
 
 		// 保存原始ZoomData值，用于后续恢复
@@ -341,14 +264,7 @@ namespace ThroughScope
 			if (scopeNode) {
 				// 设置节点名称，这对于后续查找至关重要
 				scopeNode->name = "TTSNode";
-				// Publish the new node under the lock. scopeNode arrives with a
-				// reference; assigning it here transfers that reference to the
-				// static, and the lock makes the handover atomic w.r.t. the render
-				// thread's AcquireScopeNode.
-				{
-					std::lock_guard<std::mutex> lock(ScopeNodeMutex());
-					s_CurrentScopeNode = scopeNode;
-				}
+				s_CurrentScopeNode = scopeNode;
 				auto weaponnode = RE::PlayerCharacter::GetSingleton()->Get3D(true)->GetObjectByName("Weapon")->IsNode();
 				weaponnode->AttachChild(scopeNode, false);
 				scopeNode->local.translate = RE::NiPoint3(0, 0, 10);
@@ -409,44 +325,30 @@ namespace ThroughScope
 
 	int ScopeCamera::GetScopeNodeIndexCount()
 	{
-		// The old code copied the static into a local and called that "avoiding the
-		// race". Copying a pointer does not keep the object alive: the EquipWatcher
-		// setup thread can still run CleanupScopeResources() right after the copy
-		// and DecRefCount the node into oblivion, leaving us walking freed memory
-		// (which is exactly what the crash log shows -- a fault inside library
-		// string/memory code reached from this function).
-		//
-		// AcquireScopeNode holds a reference for as long as we need it, so the node
-		// cannot be destroyed underneath this call.
-		//
-		// On top of that, hold the rebuild lock for the whole walk: keeping the
-		// object alive is not enough if a rebuild is concurrently re-parenting its
-		// children. This is the render thread's only traversal of the scope node, so
-		// taking the big lock here is what actually serialises render vs rebuild.
-		std::lock_guard<std::recursive_mutex> rebuildLock(ScopeRebuildMutex());
-		auto* currentNode = AcquireScopeNode();
+		// 使用局部变量避免潜在的竞态条件
+		auto* currentNode = s_CurrentScopeNode;
 		if (!currentNode) {
+	
 			return -1;
 		}
 
-		int result = -1;
 		try {
 			auto* effectShape = currentNode->GetObjectByName("TTSEffectShape");
-			if (effectShape) {
-				auto* triShape = effectShape->IsTriShape();
-				if (triShape) {
-					result = triShape->numTriangles * 3;
-				}
+			if (!effectShape) {
+				return -1;
 			}
+
+			auto* triShape = effectShape->IsTriShape();
+			if (!triShape) {
+				return -1;
+			}
+
+			return triShape->numTriangles * 3;
 		}
 		catch (...) {
 			logger::error("Exception in GetScopeNodeIndexCount - returning -1");
-			result = -1;
+			return -1;
 		}
-
-		// Drop our reference only after we are completely done with the node.
-		ReleaseScopeNode(currentNode);
-		return result;
 	}
 
 
