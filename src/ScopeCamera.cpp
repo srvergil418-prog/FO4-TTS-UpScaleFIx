@@ -175,13 +175,15 @@ namespace ThroughScope
 					auto* weaponObj = pc->Get3D()->GetObjectByName("Weapon");
 					if (weaponObj && weaponObj->IsNode()) {
 						auto* weaponNode = static_cast<RE::NiNode*>(weaponObj);
-						if (weaponNode->GetObjectByName("TTSNode") == oldNode) {
-							weaponNode->DetachChild(oldNode);
-							RE::NiUpdateData updateData{};
-							updateData.camera = GetScopeCamera();
-							if (updateData.camera) {
-								weaponNode->Update(updateData);
+						// 循环移除所有同名节点，而不是只处理"第一个且恰好等于 oldNode"的那个。
+						// 实测：累积多个 TTSNode 后这个条件不成立，导致一个都不摘、节点只增不减，
+						// 屏幕上会出现多份 TTS 画面。上限 32 防死循环。
+						for (int guard = 0; guard < 32; ++guard) {
+							auto* stale = weaponNode->GetObjectByName("TTSNode");
+							if (!stale) {
+								break;
 							}
+							weaponNode->DetachChild(stale);
 						}
 					}
 				}
@@ -333,7 +335,14 @@ namespace ThroughScope
 			if (auto root = player->Get3D()) {
 				if (auto weaponObj = root->GetObjectByName("Weapon")) {
 					if (auto weaponNode = weaponObj->IsNode()) {
-						if (auto existingNode = weaponNode->GetObjectByName("TTSNode")) {
+						// 循环摘掉【所有】TTSNode。GetObjectByName 只返回第一个匹配项，
+						// 单次 DetachChild 会让旧节点不断累积 —— 用户实测切枪后空中出现了 4 个
+						// TTS 画面，就是这里只摘一个造成的。上限 32 防止异常情况下死循环。
+						for (int guard = 0; guard < 32; ++guard) {
+							auto* existingNode = weaponNode->GetObjectByName("TTSNode");
+							if (!existingNode) {
+								break;
+							}
 							weaponNode->DetachChild(existingNode);
 						}
 					}
