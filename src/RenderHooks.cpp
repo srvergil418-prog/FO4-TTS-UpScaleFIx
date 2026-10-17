@@ -2,7 +2,6 @@
 #include "DataPersistence.h"
 #include "GlobalTypes.h"
 #include "HookManager.h"
-#include "TTSTrace.h"   // always-flushed trace for crash triage
 #include "RenderUtilities.h"
 #include "ScopeCamera.h"
 #include "Utilities.h"
@@ -501,31 +500,15 @@ namespace ThroughScope
 
 	void hkDrawTriShape(BSGraphics::Renderer* thisPtr, BSGraphics::TriShape* apTriShape, unsigned int auiStartIndex, unsigned int auiNumTriangles)
 	{
-		// DT-TRACE: Buffout pins the ADS/weapon-switch crash at
-		// TrueThroughScope.dll+0014169, called from TTS+00261AB which the game
-		// reaches through DrawTriShape (REL::ID 763320). hkDrawIndexed has already
-		// been ruled out by its own trace, so this hook is the remaining candidate.
-		// It reads trishape->numTriangles / numVertices through a pointer that came
-		// in as BSGraphics::TriShape*, so a bad cast or a wrong shim offset would
-		// fault right here. Capped so the log stays readable.
-		static std::uint32_t s_dtTraceBudget = 8;   // small: 200 lines drowned the useful signal
-		const bool traceThis = (s_dtTraceBudget > 0);
-		if (traceThis) { --s_dtTraceBudget; TTS_TRACE("DT-TRACE: A enter hkDrawTriShape"); }
-
 		D3DPERF_BeginEvent(0xffffffff, L"DrawTriShape");
 		auto trishape = reinterpret_cast<BSTriShape*>(apTriShape);
 
-		if (traceThis) { TTS_TRACE("DT-TRACE: B before field reads"); }
 		if (trishape->numTriangles == 32 && trishape->numVertices == 33) {
-			if (traceThis) { TTS_TRACE("DT-TRACE: C skipped (33 verts / 32 tris)"); }
 			D3DPERF_EndEvent();
 			return;
 		}
-		if (traceThis) { TTS_TRACE("DT-TRACE: D before original DrawTriShape"); }
 
 		g_hookMgr->g_DrawTriShape(thisPtr, apTriShape, auiStartIndex, auiNumTriangles);
-
-		if (traceThis) { TTS_TRACE("DT-TRACE: E after original DrawTriShape"); }
 		D3DPERF_EndEvent();
 	}
 
@@ -592,24 +575,7 @@ namespace ThroughScope
 						D3DPERF_BeginEvent(0xFF00FFFF, L"TrueThroughScope_SecondPass");
 						SecondPassRenderer renderer(context, device, d3dHooks);
 						if (!renderer.ExecuteSecondPass()) {
-							// This used to log on EVERY frame. With an upscaler active the
-							// second pass can fail persistently, which meant one string
-							// format + one disk flush per frame (spdlog is configured with
-							// flush_on(warn)) -- tens of thousands of heap operations per
-							// minute, right on the path that crashes inside std::string.
-							// Report the transition only: once when it starts failing, once
-							// when it recovers. Any real diagnosis can use those two lines.
-							static bool s_secondPassFailing = false;
-							if (!s_secondPassFailing) {
-								s_secondPassFailing = true;
-								logger::warn("[Render_PreUI Hook] SecondPassRenderer failed (will not repeat until it recovers)");
-							}
-						} else {
-							static bool s_reportedRecovery = false;
-							if (!s_reportedRecovery) {
-								s_reportedRecovery = true;
-								logger::info("[Render_PreUI Hook] SecondPassRenderer succeeded");
-							}
+							logger::warn("[Render_PreUI Hook] SecondPassRenderer failed");
 						}
 
 						// Merge Render Targets
@@ -756,22 +722,7 @@ namespace ThroughScope
 		// 当玩家处于隐身状态时，禁用 scope 渲染相关的几何体过滤以避免 D3D11 崩溃
 		g_scopeRenderMgr->UpdateChameleonStatus();
 
-		// GetCurrentWeaponInfo() returns a WeaponInfo BY VALUE and, on the way, walks
-		// the player's whole inventory and builds several std::strings. Doing that
-		// every single frame means dozens of string allocations/frees per frame,
-		// which is exactly the kind of heap churn that turns a latent bug into the
-		// "crash inside std::string / std::format" we keep seeing -- and weapon
-		// swaps add a setup thread tearing down render nodes on top of it.
-		//
-		// The data only changes when the equipped weapon changes, so refresh it
-		// every 15th frame (~0.25s at 60fps) instead. A swap is still picked up
-		// within a quarter second, which is far below the human-noticeable delay.
-		static DataPersistence::WeaponInfo s_cachedWeaponInfo{};
-		static std::uint32_t            s_weaponInfoTick = 0;
-		if (s_weaponInfoTick++ % 15 == 0) {
-			s_cachedWeaponInfo = DataPersistence::GetCurrentWeaponInfo();
-		}
-		auto& weaponInfo = s_cachedWeaponInfo;
+		auto weaponInfo = DataPersistence::GetCurrentWeaponInfo();
 
 		auto enbIntegration = ENBIntegration::GetSingleton();
 
@@ -883,7 +834,7 @@ namespace ThroughScope
 			return;
 		}
 
-		// 从 TLS 获取 BSGraphics::TTSContextPlaceholder
+		// 从 TLS 获取 BSGraphics::Context
 		_TEB* teb = NtCurrentTeb();
 		auto tls_index = *ptr_tls_index_sky;
 		uintptr_t contextPtr = *(uintptr_t*)(*((uint64_t*)teb->Reserved1[11] + tls_index) + 2848i64);
@@ -897,7 +848,7 @@ namespace ThroughScope
 			return;
 		}
 
-		auto context = (RE::BSGraphics::TTSContextPlaceholder*)contextPtr;
+		auto context = (RE::BSGraphics::Context*)contextPtr;
 		auto& cameraData = context->shadowState.CameraData;
 
 		// 备份当前的投影矩阵（这是被主相机覆盖的错误矩阵）
