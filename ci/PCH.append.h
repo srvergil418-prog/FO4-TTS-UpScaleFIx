@@ -629,6 +629,10 @@ BytePad<0x20> pad_580;         // 580
 		BytePad<0x18>  pad0;        // 000 pCommandBuffer / pShader / pShaderProperty
 		BSGeometry*    pGeometry;   // 018  <- TTS reads ->name and ->world.scale
 	};
+	// Every other hand-written struct in this file asserts its PDB-verified
+	// offsets; BSRenderPass did not, which is exactly why pGeometry silently sat
+	// at 0 and aliased pCommandBuffer for two days. Keep this one.
+	static_assert(offsetof(BSRenderPass, pGeometry) == 0x18, "BSRenderPass::pGeometry must be 0x18 (author PDB 0x2d0d1)");
 
 	// ========================================================================
 	// BSShaderManagerState              (PDB: 75 members)
