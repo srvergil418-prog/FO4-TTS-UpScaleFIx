@@ -60,6 +60,22 @@ namespace ThroughScope
 		static void ReleaseScopeNode(RE::NiNode* a_node);
 		static std::mutex& ScopeNodeMutex();
 
+		// Big lock covering "rebuild the scope node" against "walk the scope node".
+		//
+		// Holding a reference (AcquireScopeNode) keeps the node object alive, but it
+		// does NOT stop another thread from mutating its children while the render
+		// thread is iterating them. Rebuilding does exactly that: LoadNIF, then
+		// name/transform, then weaponNode->AttachChild(), then Update(). A walk that
+		// crosses that mutation reads freed child pointers -- the crash lands inside
+		// library code, and the attached model disappears because the tree it hung
+		// off was rebuilt underneath it.
+		//
+		// Rebuilds happen on weapon swaps (EquipWatcher's own thread and the main
+		// thread's HK PCUpdate path), while walks happen every frame on the render
+		// thread. They must not overlap. Recursive because a rebuild path may call
+		// helpers that also take it.
+		static std::recursive_mutex& ScopeRebuildMutex();
+
 		// Atomically replace s_CurrentScopeNode: drop the reference held by the old
 		// node and take over the caller's reference to the new one.
 		//
