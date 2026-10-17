@@ -1137,32 +1137,34 @@ namespace ThroughScope {
 					UINT probeCount = 1;
 					pContext->RSGetViewports(&probeCount, &probeVp);
 
-					// RT4 的真实像素尺寸：从它的 RTV 描述里取，最可靠
-					D3D11_RENDER_TARGET_VIEW_DESC rtvDesc = {};
-					D3D11_TEXTURE2D_DESC texDesc = {};
+					// RT4 的真实像素尺寸：从它的纹理描述里取，最可靠
 					UINT rt4W = 0, rt4H = 0;
 					if (rt4RTV) {
-						rt4RTV->GetDesc(&rtvDesc);
 						Microsoft::WRL::ComPtr<ID3D11Resource> res;
 						rt4RTV->GetResource(res.GetAddressOf());
 						Microsoft::WRL::ComPtr<ID3D11Texture2D> tex2d;
 						if (res && SUCCEEDED(res.As(&tex2d)) && tex2d) {
+							D3D11_TEXTURE2D_DESC texDesc = {};
 							tex2d->GetDesc(&texDesc);
 							rt4W = texDesc.Width;
 							rt4H = texDesc.Height;
 						}
 					}
 
+					auto* rs = RE::BSGraphics::State::GetSingleton();
+					auto* srm = ScopeRenderingManager::GetSingleton();
+					const unsigned bbW = rs ? rs->backBufferWidth : 0u;
+					const unsigned bbH = rs ? rs->backBufferHeight : 0u;
+
 					logger::info(
-						"[DIAG viewport] captured=({:.0f}x{:.0f}) hasCaptured={} rt4={}x{} currentVp=({:.0f}x{:.0f}) "
-						"backBuffer={}x{} screen={}x{} upscalingActive={}",
-						s_ScopeQuadOriginalViewport.Width, s_ScopeQuadOriginalViewport.Height,
+						"[DIAG viewport] captured={}x{} hasCaptured={} rt4={}x{} currentVp={}x{} backBuffer={}x{} upscalingActive={}",
+						static_cast<unsigned>(s_ScopeQuadOriginalViewport.Width),
+						static_cast<unsigned>(s_ScopeQuadOriginalViewport.Height),
 						s_HasScopeQuadViewport,
 						rt4W, rt4H,
-						probeVp.Width, probeVp.Height,
-						rendererData->backBufferWidth, rendererData->backBufferHeight,
-						rendererData->screenWidth, rendererData->screenHeight,
-						scopeRenderMgr->IsUpscalingActive());
+						static_cast<unsigned>(probeVp.Width), static_cast<unsigned>(probeVp.Height),
+						bbW, bbH,
+						srm ? srm->IsUpscalingActive() : false);
 				}
 			}
 
