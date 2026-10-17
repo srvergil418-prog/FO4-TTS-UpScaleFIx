@@ -595,7 +595,7 @@ namespace ThroughScope
 			}
 
 			if (contextPtr) {
-				auto context = (RE::BSGraphics::Context*)contextPtr;
+				auto context = (RE::BSGraphics::TTSContextPlaceholder*)contextPtr;
 				auto viewProjMat = context->shadowState.CameraData.viewProjMat;
 
 				// 保存当前矩阵到 "上一帧" 供下一帧 MV 计算使用
@@ -634,7 +634,7 @@ namespace ThroughScope
 			}
 
 			if (contextPtr) {
-				auto context = (RE::BSGraphics::Context*)contextPtr;
+				auto context = (RE::BSGraphics::TTSContextPlaceholder*)contextPtr;
 				backupPosAdjust = context->shadowState.PosAdjust;
 
 				// 设置 PosAdjust 为瞄具相机的世界位置
