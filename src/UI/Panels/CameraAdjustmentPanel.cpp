@@ -979,11 +979,7 @@ namespace ThroughScope
 
 			// 设置节点名称，确保与渲染流程中的查找一致
 			loadedNode->name = "TTSNode";
-			// Publish through ScopeCamera so the swap is atomic w.r.t. the render
-			// thread and the previous node's reference is released. Assigning the
-			// static directly here leaked the old node and raced the scope render
-			// path -- the same use-after-free that made weapon swaps crash.
-			ScopeCamera::PublishScopeNode(loadedNode);
+			ScopeCamera::s_CurrentScopeNode = loadedNode;
 
 			// 设置初始变换
 			loadedNode->local.translate = RE::NiPoint3(0, 0, 7);
