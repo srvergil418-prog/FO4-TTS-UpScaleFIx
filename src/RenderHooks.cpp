@@ -756,6 +756,41 @@ namespace ThroughScope
 			return g_hookMgr->g_PCUpdateMainThread(pChar);
 		}
 
+		// ------------------------------------------------------------------
+		// TTSNode 自愈
+		//
+		// 主线程上面那段只在【首次】(hasFirstSpawnNode==false) 建节点；切枪之后
+		// 全靠 EquipWatcher 那个 "sleep 100ms 后干活" 的线程。而武器的 3D 节点是
+		// 异步重建的，100ms 时可能还是旧节点 —— AttachChild 挂到一个即将销毁的
+		// Weapon 上，新武器模型建好后 TTSNode 就不见了。表现就是用户实测的：
+		// 切枪后 F2 显示"无TTSNode"、瞄具没有效果，而手动"重新加载"立刻恢复
+		// （那时早已过去数秒，拿到的是新节点）。
+		//
+		// 这里做周期检查：只要有配置模型、而 Weapon 下找不到 TTSNode，就重建。
+		// 只在真的丢失时重建，正常情况下每 30 帧一次空查几乎无开销。
+		// ------------------------------------------------------------------
+		{
+			static int s_selfHealTick = 0;
+			if (++s_selfHealTick >= 30) {
+				s_selfHealTick = 0;
+				auto* pc = RE::PlayerCharacter::GetSingleton();
+				if (pc && pc->Get3D() && weaponInfo.currentConfig &&
+					!weaponInfo.currentConfig->modelName.empty()) {
+					auto* weaponObj = pc->Get3D()->GetObjectByName("Weapon");
+					auto* weaponNode = weaponObj ? weaponObj->IsNode() : nullptr;
+					if (weaponNode && weaponNode->GetObjectByName("TTSNode") == nullptr) {
+						logger::info("TTS self-heal: TTSNode missing under Weapon, rebuilding");
+						ScopeCamera::CleanupScopeResources();
+						ScopeCamera::SetupScopeForWeapon(weaponInfo);
+						auto* rendererData = RE::BSGraphics::RendererData::GetSingleton();
+						if (rendererData && rendererData->context) {
+							d3dHooks->SetScopeTexture((ID3D11DeviceContext*)rendererData->context);
+						}
+					}
+				}
+			}
+		}
+
 		if (g_pchar->IsInThirdPerson())
 			return g_hookMgr->g_PCUpdateMainThread(pChar);
 
