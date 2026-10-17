@@ -972,8 +972,28 @@ namespace ThroughScope {
 
 		// 使用渲染分辨率而非显示分辨率 (Fallout4Upscaler兼容)
 		ScopeConstantBuffer newCBData = {};
-		newCBData.screenWidth = viewportWidth;
-		newCBData.screenHeight = viewportHeight;
+		// screen* 必须是【渲染目标(RT4)】的真实像素尺寸，viewport* 才是【绘制区域】。
+		// 作者原来把两者都设成 viewport 尺寸，在原生渲染下（3840==3840）没问题，
+		// 但超分时 viewport 被降到 1920x1080，而 RT4 仍是 3840x2160 —— shader 按
+		// 1920 计算，内容就只覆盖 RT4 的四分之一（用户实测：画中画正好是整个屏幕
+		// 的四分之一大）。这里把 screen* 改成 RT4 真实尺寸即可。
+		{
+			UINT cbRt4W = 0, cbRt4H = 0;
+			if (auto rtv = rendererData->renderTargets[4].rtView) {
+				Microsoft::WRL::ComPtr<ID3D11RenderTargetView> rt4View = (ID3D11RenderTargetView*)rtv;
+				Microsoft::WRL::ComPtr<ID3D11Resource> rt4Res;
+				rt4View->GetResource(rt4Res.GetAddressOf());
+				Microsoft::WRL::ComPtr<ID3D11Texture2D> rt4Tex2d;
+				if (rt4Res && SUCCEEDED(rt4Res.As(&rt4Tex2d)) && rt4Tex2d) {
+					D3D11_TEXTURE2D_DESC d = {};
+					rt4Tex2d->GetDesc(&d);
+					cbRt4W = d.Width;
+					cbRt4H = d.Height;
+				}
+			}
+			newCBData.screenWidth = cbRt4W ? static_cast<float>(cbRt4W) : viewportWidth;
+			newCBData.screenHeight = cbRt4H ? static_cast<float>(cbRt4H) : viewportHeight;
+		}
 		newCBData.viewportWidth = viewportWidth;
 		newCBData.viewportHeight = viewportHeight;
 		newCBData.cameraPosition[0] = cameraPos.x;
@@ -1215,40 +1235,14 @@ namespace ThroughScope {
 
 			Microsoft::WRL::ComPtr<ID3D11DepthStencilState> stencilWriteDSS;
 			if (SUCCEEDED(device->CreateDepthStencilState(&dssDesc, stencilWriteDSS.GetAddressOf()))) {
-				// 设置 viewport。
+				// 设置 viewport：保持作者原样（直接用捕获的 viewport）。
 				//
-				// 作者原来的做法是直接用游戏画瞄具时捕获的 viewport，注释里假设
-				// "D3D11 的 viewport 变换会自动处理坐标映射，即使 RT4 尺寸不同"。
-				// 实测（tts-viewport.txt）证明这个假设只在【原生渲染】下成立：
-				//     原生:  captured=3840x2160  rt4=3840x2160   -> 一致，正常
-				//     超分:  captured=1920x1080  rt4=3840x2160   -> 差 2 倍（面积 4 倍）
-				// 超分会把渲染分辨率降下来（这里 4K -> 1080p），游戏画四边形时用的是
-				// 缩放后的坐标系，而我们渲染到全分辨率的 RT4 —— 于是画中画只占 RT4
-				// 左上角四分之一。这就是"开超分后画幅错位"的根因。
-				//
-				// 修法：viewport 按 RT4 / captured 的比例缩放，让整个 RT4 都被覆盖。
-				// 只在两者不一致时缩放，一致时保持原样（原生渲染完全不受影响）。
+				// 曾试过按 RT4/captured 的比例放大 viewport，实测失败：
+				//   - 镜片被顶飞（viewport 参与几何变换）
+				//   - 画中画大小没变（内容尺寸不由 viewport 决定，而在 UV/采样侧）
+				// 所以这里保持原样，修复应在 UV 那一侧。
 				if (s_HasScopeQuadViewport) {
-					D3D11_VIEWPORT vp = s_ScopeQuadOriginalViewport;
-					if (rt4W > 0 && rt4H > 0 &&
-						vp.Width > 0.0f && vp.Height > 0.0f &&
-						(static_cast<UINT>(vp.Width + 0.5f) != rt4W || static_cast<UINT>(vp.Height + 0.5f) != rt4H)) {
-						const float sx = static_cast<float>(rt4W) / vp.Width;
-						const float sy = static_cast<float>(rt4H) / vp.Height;
-						vp.TopLeftX *= sx;
-						vp.TopLeftY *= sy;
-						vp.Width *= sx;
-						vp.Height *= sy;
-						static int s_scaleLog = 0;
-						if ((s_scaleLog++ % 120) == 0) {
-							logger::info("[viewport scale] captured={}x{} rt4={}x{} -> scaled={}x{}",
-								static_cast<unsigned>(s_ScopeQuadOriginalViewport.Width),
-								static_cast<unsigned>(s_ScopeQuadOriginalViewport.Height),
-								rt4W, rt4H,
-								static_cast<unsigned>(vp.Width), static_cast<unsigned>(vp.Height));
-						}
-					}
-					pContext->RSSetViewports(1, &vp);
+					pContext->RSSetViewports(1, &s_ScopeQuadOriginalViewport);
 				}
 				
 				// 绑定 RT4 + 支持 stencil 的 DSV
