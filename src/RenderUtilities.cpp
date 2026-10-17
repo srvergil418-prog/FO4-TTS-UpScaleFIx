@@ -543,16 +543,14 @@ namespace ThroughScope
         unsigned int width = 0;
         unsigned int height = 0;
 
-        // Priority 1: viewport captured from RT4 (dynamic-resolution aware)
-        D3D11_VIEWPORT fpViewport = {};
-        if (GetFirstPassViewport(fpViewport) &&
-            fpViewport.Width >= 1.0f && fpViewport.Height >= 1.0f) {
-            width  = static_cast<unsigned int>(fpViewport.Width);
-            height = static_cast<unsigned int>(fpViewport.Height);
-        }
-
-        // Priority 2: the RT4 texture description itself
-        if ((width == 0 || height == 0) && rendererData->renderTargets[4].texture) {
+        // Priority 1: the RT4 texture description -- this is the surface the second
+        // pass actually draws into, so its size is what the picture-in-picture must
+        // fill. With upscaling active the viewport is the INTERNAL resolution (it
+        // shrinks as the upscaler preset gets more aggressive), while RT4 stays at
+        // the size the upscaler samples from. Sizing the temp textures off the
+        // viewport therefore makes the scope picture shrink along with the preset --
+        // "the visible image gets smaller the lower I set upscaling".
+        if (rendererData && rendererData->renderTargets[4].texture) {
             D3D11_TEXTURE2D_DESC rt4Desc = {};
             reinterpret_cast<ID3D11Texture2D*>(rendererData->renderTargets[4].texture)->GetDesc(&rt4Desc);
             if (rt4Desc.Width > 0 && rt4Desc.Height > 0) {
@@ -561,7 +559,19 @@ namespace ThroughScope
             }
         }
 
-        // Priority 3: fall back to the old behaviour (output size)
+        // Priority 2: a viewport captured while drawing into RT4. Only used when RT4
+        // itself is unavailable; note this may be the internal (upscaled) resolution.
+        if (width == 0 || height == 0) {
+            D3D11_VIEWPORT fpViewport = {};
+            if (GetFirstPassViewport(fpViewport) &&
+                fpViewport.Width >= 1.0f && fpViewport.Height >= 1.0f) {
+                width  = static_cast<unsigned int>(fpViewport.Width);
+                height = static_cast<unsigned int>(fpViewport.Height);
+            }
+        }
+
+        // Priority 3: fall back to the output size. Only correct when there is no
+        // upscaling (internal resolution == output resolution).
         if (width == 0 || height == 0) {
             auto rendererState = RE::BSGraphics::State::GetSingleton();
             width  = rendererState.backBufferWidth;
