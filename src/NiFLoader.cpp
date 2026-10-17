@@ -133,18 +133,12 @@ NiNode* NIFLoader::LoadNIF(const char* filePath)
 {
 	ProbeRelocations();
 
-	BSStream* stream = BSStream::Create();
-	if (!stream) {
-		logger::error("Failed to create BSStream for: {}", filePath);
-		return nullptr;
-	}
-	if (!stream->Load(filePath)) {
-		logger::error("Failed to load NIF file via BSStream: {}", filePath);
-		return nullptr;
-	}
-	NiNode* rootNode = stream->GetTopLevelNode();
+	// 暂时回到 BSModelDB：BSStream 的 ID 身份还没被运行时证据确认，
+	// 直接用它会让整个 TTS 失效（实测 #177：不切枪时瞄具也没有效果）。
+	// 探测结果写在 tts-probe.txt，等首字节证据确认 ID 再切回来。
+	NiNode* rootNode = LoadModelViaModelDB(filePath);
 	if (!rootNode) {
-		logger::error("Failed to get root NiNode: {}", filePath);
+		logger::error("Failed to load NIF file: {}", filePath);
 		return nullptr;
 	}
 	return rootNode;
