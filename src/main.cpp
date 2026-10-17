@@ -1,4 +1,3 @@
-
 #include "Constants.h"
 #include "D3DHooks.h"
 #include "GlobalTypes.h"
@@ -13,7 +12,6 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
-#include <format>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -27,26 +25,13 @@
 #include "rendering/RenderTargetMerger.h"
 #include "rendering/ScopeCulling.h"
 #include "ENBIntegration.h"
-// ==================== TTS_TRACE_MARKER ====================
-// The trace helper itself now lives in TTSTrace.h so D3DHooks.cpp can use it too
-// (crash logs only give us "TrueThroughScope.dll+<rva>", so the render hooks need
-// the same always-flushed channel as the loader).
-#include "TTSTrace.h"
 
-extern "C" BOOL WINAPI DllMain(HINSTANCE, DWORD reason, LPVOID)
-{
-    if (reason == DLL_PROCESS_ATTACH) {
-        TTS_TraceWrite("DllMain PROCESS_ATTACH");
-    }
-    return TRUE;
-}
-// ================== end TTS_TRACE_MARKER ==================
 using namespace RE;
 using namespace RE::BSGraphics;
 
 #pragma region Pointer
-// RELGlobalTypes.h
-// ptr_DrawWorld1stPerson  ThroughScope 
+// 本地REL指针（不在GlobalTypes.h中）
+// ptr_DrawWorld1stPerson 已移至 ThroughScope 命名空间（见下方定义）
 REL::Relocation<bool*> ptr_DrawWorld_b1stPersonEnable{ REL::ID(922366) };
 REL::Relocation<bool*> ptr_DrawWorld_b1stPersonInWorld{ REL::ID(34473) };
 REL::Relocation<BSCullingGroup**> ptr_k1stPersonCullingGroup{ REL::ID(731482) };
@@ -66,32 +51,32 @@ static REL::Relocation<uint32_t*> AlphaTestMergeInstancedZPrePassDrawDataCount{ 
 
 static REL::Relocation<BSShaderManagerState**> BSM_ST{ REL::ID(1327069) };
 
-// LightStateBackupGlobalTypes.h
+// LightStateBackup定义已移动到GlobalTypes.h
 std::vector<ThroughScope::LightStateBackup> ThroughScope::g_LightStateBackups;
 
 #pragma endregion
 
-// GlobalTypes.h
+// 全局变量定义（在GlobalTypes.h中声明）
 uint64_t ThroughScope::savedDrawWorld = 0;
 RE::PlayerCharacter* ThroughScope::g_pchar = nullptr;
-// isScopCamReady  isRenderReady  RenderStateManager
+// isScopCamReady 和 isRenderReady 已移至 RenderStateManager
 ThroughScope::D3DHooks* ThroughScope::d3dHooks = nullptr;
 NIFLoader* ThroughScope::nifloader = nullptr;
 HMODULE ThroughScope::upscalerModular = nullptr;
 RE::NiCamera* ThroughScope::ggg_ScopeCamera = nullptr;
 
-//  ViewProjMat SetCameraData 
+// 保存瞄具渲染时正确的 ViewProjMat（在 SetCameraData 后保存）
 __m128 ThroughScope::g_ScopeViewProjMat[4] = {};
 bool ThroughScope::g_ScopeViewProjMatValid = false;
 
-//  Scope ViewProjMat Motion Vector 
+// 保存上一帧的 Scope ViewProjMat，用于 Motion Vector 计算
 __m128 ThroughScope::g_ScopePreviousViewProjMat[4] = {};
 bool ThroughScope::g_ScopePreviousViewProjMatValid = false;
 
-//  FOV PlayerCamera->firstPersonFOV 
-float ThroughScope::g_MainCameraFOV = 70.0f;  // 
+// 保存主相机的 FOV，在第一次渲染时从 PlayerCamera->firstPersonFOV 获取
+float ThroughScope::g_MainCameraFOV = 70.0f;  // 默认值
 
-// RELGlobalTypes.h
+// REL指针定义（在GlobalTypes.h中声明）
 REL::Relocation<RE::ShadowSceneNode**> ThroughScope::ptr_DrawWorldShadowNode{ REL::ID(1327069) };
 REL::Relocation<RE::NiCamera**> ThroughScope::ptr_DrawWorldCamera{ REL::ID(1444212) };
 REL::Relocation<RE::NiCamera**> ThroughScope::ptr_DrawWorld1stCamera{ REL::ID(380177) };
@@ -107,7 +92,7 @@ REL::Relocation<uint32_t*> ThroughScope::FPZPrePassDrawDataCount{ REL::ID(163482
 REL::Relocation<uint32_t*> ThroughScope::FPAlphaTestZPrePassDrawDataCount{ REL::ID(382658) };
 REL::Relocation<RE::NiAVObject**> ThroughScope::ptr_DrawWorld1stPerson{ REL::ID(1491228) };
 
-// 
+// 渲染状态管理器
 static ThroughScope::RenderStateManager* g_renderStateMgr = ThroughScope::RenderStateManager::GetSingleton();
 
 static ThroughScope::RendererShadowState* GetRendererShadowState()
@@ -138,13 +123,13 @@ namespace ThroughScope
 
 	//renderTargets[0] = SwapChainImage RenderTarget(Only rtView and srView)
 	//renderTargets[4] = Main Render_PreUI RenderTarget
-	//renderTargets[26] = TAA  = TAA PS t1
+	//renderTargets[26] = TAA 历史缓冲 = TAA PS t1
 	//renderTargets[29] = TAA Motion Vectors = TAA PS t2
-	//renderTargets[24] = TAA Jitter Mask = TAA PS t4 
-	//renderTargets[15] =  1920 -> 480 
-	//renderTargets[69] = 1x1 
+	//renderTargets[24] = TAA Jitter Mask = TAA PS t4 就是那个红不拉几的
+	//renderTargets[15] = 用于调整颜色的 1920 -> 480 的模糊的图像
+	//renderTargets[69] = 1x1 的小像素
 
-	// RenderStateManager
+	// 瞄具专用渲染标志已移至RenderStateManager
 	namespace FirstSpawnDelay
 	{
 		bool delayStarted = false;
@@ -153,7 +138,7 @@ namespace ThroughScope
 		void Reset()
 		{
 			delayStarted = false;
-			// delayStartTime 
+			// delayStartTime 不需要重置，下次会重新赋值
 		}
 	}
 
@@ -164,9 +149,9 @@ namespace ThroughScope
 		ScopeCamera::isFirstScopeRender = true;
 		D3DHooks::ResetParallaxState();
 
-		// ZoomData
+		// 读档后立即恢复ZoomData
 		std::thread([]() {
-			std::this_thread::sleep_for(std::chrono::milliseconds(1000));  // 
+			std::this_thread::sleep_for(std::chrono::milliseconds(1000));  // 等待武器完全加载
 			ScopeCamera::RestoreZoomDataForCurrentWeapon();
 			logger::info("Restored ZoomData after load game");
 		}).detach();
@@ -179,7 +164,6 @@ namespace ThroughScope
 // Initialization thread function
 DWORD WINAPI InitThread(HMODULE hModule)
 {
-	TTS_TRACE("THREAD-TRACE: InitThread started, waiting for renderer");
 	while (!BSGraphics::RendererData::GetSingleton() 
 		|| !BSGraphics::RendererData::GetSingleton()->renderWindow 
 		|| !BSGraphics::RendererData::GetSingleton()->renderWindow->hwnd 
@@ -188,31 +172,24 @@ DWORD WINAPI InitThread(HMODULE hModule)
 		|| !RE::BSGraphics::RendererData::GetSingleton()->context) {
 		Sleep(10);
 	}
-	TTS_TRACE("THREAD-TRACE: renderer ready (RendererData/hwnd/swapChain/device/context)");
 
 	// Wait for the game world to be fully loaded
-	TTS_TRACE("THREAD-TRACE: waiting for game world");
 	while (!RE::PlayerCharacter::GetSingleton() || !RE::PlayerCharacter::GetSingleton()->Get3D() || !RE::PlayerControls::GetSingleton() || !RE::PlayerCamera::GetSingleton() || !RE::Main::WorldRootCamera()) 
 	{
 		Sleep(500);
 	}
-	TTS_TRACE("THREAD-TRACE: game world loaded");
 	logger::info("TrueThroughScope: Game world loaded, initializing ThroughScope...");
 
 	// Initialize systems
 	logger::info("TrueThroughScope: About to initialize ImGui - checking for AntTweakBar conflicts...");
 	g_renderStateMgr->SetImGuiManagerInit(ThroughScope::ImGuiManager::GetSingleton()->Initialize());
-	TTS_TRACE("THREAD-TRACE: ImGuiManager done");
 
 	bool scopeReady = ThroughScope::ScopeCamera::Initialize();
-	TTS_TRACE(scopeReady ? "THREAD-TRACE: ScopeCamera::Initialize -> TRUE" : "THREAD-TRACE: ScopeCamera::Initialize -> FALSE");
 	bool renderReady = ThroughScope::RenderUtilities::Initialize();
-	TTS_TRACE(renderReady ? "THREAD-TRACE: RenderUtilities::Initialize -> TRUE" : "THREAD-TRACE: RenderUtilities::Initialize -> FALSE");
 	
 	// Initialize RenderTargetMerger for centralized RT backup/merge
 	if (renderReady) {
 		ThroughScope::RenderTargetMerger::GetInstance().Initialize();
-		TTS_TRACE("THREAD-TRACE: RenderTargetMerger done");
 	}
 
 	// Update render state manager
@@ -220,13 +197,12 @@ DWORD WINAPI InitThread(HMODULE hModule)
 	g_renderStateMgr->SetRenderReady(renderReady);
 	ThroughScope::ggg_ScopeCamera = ThroughScope::ScopeCamera::GetScopeCamera();
 	
-	//  DataPersistence 
+	// 从 DataPersistence 加载并应用高级裁剪设置
 	auto dataPersistence = ThroughScope::DataPersistence::GetSingleton();
 	const auto& globalSettings = dataPersistence->GetGlobalSettings();
 	ThroughScope::SetCullingSafetyMargin(globalSettings.cullingSafetyMargin);
 	ThroughScope::SetShadowCasterRange(globalSettings.shadowCasterRange);
 
-	TTS_TRACE("THREAD-TRACE: ThroughScope initialization COMPLETED");
 	logger::info("TrueThroughScope: ThroughScope initialization completed");
 	return 0;
 }
@@ -234,39 +210,29 @@ DWORD WINAPI InitThread(HMODULE hModule)
 // Initialize the plugin
 void InitializePlugin()
 {
-	TTS_TRACE("INIT-TRACE: InitializePlugin ENTER");
 	logger::info("TrueThroughScope: Plugin initialization started");
 
 	ThroughScope::g_pchar = RE::PlayerCharacter::GetSingleton();
-	TTS_TRACE("INIT-TRACE: PlayerCharacter::GetSingleton done");
 	g_hookMgr->RegisterAllHooks();
-	TTS_TRACE("INIT-TRACE: RegisterAllHooks done");
 	ThroughScope::EquipWatcher::GetSingleton()->Initialize();
-	TTS_TRACE("INIT-TRACE: EquipWatcher done");
 	ThroughScope::AnimationGraphEventWatcher::GetSingleton()->Initialize();
-	TTS_TRACE("INIT-TRACE: AnimationGraphEventWatcher done");
 
 	// Start initialization thread for components that need the game world
 	HANDLE hThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)InitThread, (HMODULE)REX::W32::GetCurrentModule(), 0, NULL);
-	TTS_TRACE("INIT-TRACE: InitThread created");
 
 	// Initialize RenderStateManager with default values
 	g_renderStateMgr->Initialize();
-	TTS_TRACE("INIT-TRACE: RenderStateManager done");
-
+	
 	// Initialize ScopeRenderingManager for fo4test compatibility detection
 	ThroughScope::ScopeRenderingManager::GetSingleton()->Initialize();
-	TTS_TRACE("INIT-TRACE: ScopeRenderingManager done");
-
+	
 	// Initialize ENB integration (will detect ENB and register callback if present)
 	ThroughScope::ENBIntegration::GetSingleton()->Initialize();
-	TTS_TRACE("INIT-TRACE: ENBIntegration done - InitializePlugin COMPLETE");
 }
 
 // F4SE Query plugin
 F4SE_EXPORT bool F4SEAPI F4SEPlugin_Query(const F4SE::QueryInterface* a_f4se, F4SE::PluginInfo* a_info)
 {
-	TTS_TRACE("F4SEPlugin_Query ENTER");
 	a_info->infoVersion = F4SE::PluginInfo::kVersion;
 	a_info->name = Version::PROJECT.data();
 	a_info->version = Version::MAJOR;
@@ -319,7 +285,6 @@ F4SE_EXPORT bool F4SEAPI F4SEPlugin_Query(const F4SE::QueryInterface* a_f4se, F4
 // F4SE Load plugin
 F4SE_EXPORT bool F4SEAPI F4SEPlugin_Load(const F4SE::LoadInterface* a_f4se)
 {
-	TTS_TRACE("F4SEPlugin_Load ENTER");
 	//SetConsoleOutputCP(CP_UTF8);
 	//SetConsoleCP(CP_UTF8);
 
@@ -331,84 +296,21 @@ F4SE_EXPORT bool F4SEAPI F4SEPlugin_Load(const F4SE::LoadInterface* a_f4se)
 
 #endif
 
-	TTS_TRACE("LOAD-TRACE-01 before MH_Initialize");
 	auto mhInit = MH_Initialize();
-	TTS_TRACE("LOAD-TRACE-02 after MH_Initialize");
-	// MinHook
+	// 初始化MinHook
 	if (mhInit != MH_OK) {
 		logger::info("MH_Initialize Not Ok, Reason: {}", (int)mhInit);
 	}
 
-	TTS_TRACE("LOAD-TRACE-03 before D3DHooks::GetSingleton");
 	ThroughScope::d3dHooks = D3DHooks::GetSingleton();
-	TTS_TRACE("LOAD-TRACE-04 after D3DHooks::GetSingleton");
-	TTS_TRACE("LOAD-TRACE-05 before NIFLoader::GetSingleton");
 	ThroughScope::nifloader = NIFLoader::GetSingleton();
-	TTS_TRACE("LOAD-TRACE-06 after NIFLoader::GetSingleton");
 
 	logger::info("TrueThroughScope: Ninja!");
 	logger::info("TrueThroughScope: TrueThroughScope does NOT use AntTweakBar - any such errors are from other mods");
 
-	TTS_TRACE("LOAD-TRACE-07 before PreInit");
 	ThroughScope::d3dHooks->PreInit();
-	TTS_TRACE("LOAD-TRACE-08 after PreInit");
 
-	// NOTE ON THE EARLIER SUSPECT: the load crash was first blamed on
-	// REL::IDDB::get() -> mmio::mapped_file_source::open() failing. That was
-	// WRONG: a failing mmap would route through stl::report_and_fail(), which
-	// pops a MessageBox and calls TerminateProcess. No MessageBox was ever seen.
-	// The real fault is the F4SE 0.6.23 vs 0.7.1 interface-layout mismatch
-	// described below and fixed in ci/build.ps1 step [2b/9].
-	//
-	// IFACE-DUMP: read the loader-provided interface table ourselves, before
-	// F4SE::Init touches it. The 1.10.163 loader is F4SE 0.6.23, whose
-	// F4SEInterface ENDS at GetPluginInfo (+40). powerof3/master declares one
-	// extra member at +48, GetSaveFolderName ("0.7.1+"), and F4SE::Init() calls
-	// it unconditionally -- which is the 0xC0000005 @ offset 0. Slot q6 below
-	// is that member; q3/q4/q5 are GetPluginHandle/GetReleaseIndex/GetPluginInfo
-	// and should look like real code addresses inside f4se_loader / Fallout4.
-	{
-		const auto* _raw = reinterpret_cast<const std::uintptr_t*>(a_f4se);
-		char _db[512] = { 0 };
-		wsprintfA(_db, "IFACE-DUMP: base=%p q0=%p q1=%p q2=%p q3=%p q4=%p q5=%p q6=%p q7=%p",
-			static_cast<const void*>(a_f4se),
-			reinterpret_cast<const void*>(_raw[0]),
-			reinterpret_cast<const void*>(_raw[1]),
-			reinterpret_cast<const void*>(_raw[2]),
-			reinterpret_cast<const void*>(_raw[3]),
-			reinterpret_cast<const void*>(_raw[4]),
-			reinterpret_cast<const void*>(_raw[5]),
-			reinterpret_cast<const void*>(_raw[6]),
-			reinterpret_cast<const void*>(_raw[7]));
-		TTS_TraceWrite(_db);
-	}
-
-	// EXC-TRACE: catch access violations too. catch(...) does NOT catch SEH,
-	// and the crash inside F4SE::Init is a real access violation, so use
-	// __try/__except. The exception record is captured in the filter expression
-	// (GetExceptionInformation is only valid there) into a static so the handler
-	// can report the faulting address and the access-violation operands:
-	// info0 == 8 means "execute", i.e. a call through a null/garbage pointer.
-	static PEXCEPTION_POINTERS s_excPtrs = nullptr;
-	__try {
-		F4SE::Init(a_f4se);
-		TTS_TRACE("EXC-TRACE: F4SE::Init returned normally");
-	} __except (s_excPtrs = GetExceptionInformation(), EXCEPTION_EXECUTE_HANDLER) {
-		char _ebuf[512] = { 0 };
-		const auto* _er = (s_excPtrs ? s_excPtrs->ExceptionRecord : nullptr);
-		if (_er) {
-			wsprintfA(_ebuf, "EXC-TRACE: code=0x%08lX addr=%p info0=%lu info1=%p",
-				(unsigned long)_er->ExceptionCode,
-				static_cast<const void*>(_er->ExceptionAddress),
-				(unsigned long)(_er->NumberParameters > 0 ? _er->ExceptionInformation[0] : 0),
-				reinterpret_cast<void*>(_er->NumberParameters > 1 ? _er->ExceptionInformation[1] : 0));
-		} else {
-			wsprintfA(_ebuf, "EXC-TRACE: SEH caught, code=0x%08lX (no exception record)", (unsigned long)GetExceptionCode());
-		}
-		TTS_TraceWrite(_ebuf);
-		return false;
-	}
-	TTS_TRACE("LOAD-TRACE-10 after F4SE::Init");
+	F4SE::Init(a_f4se);
 	// Register plugin for F4SE messages
 	const F4SE::MessagingInterface* message = F4SE::GetMessagingInterface();
 	if (!message) {
@@ -418,32 +320,23 @@ F4SE_EXPORT bool F4SEAPI F4SEPlugin_Load(const F4SE::LoadInterface* a_f4se)
 
 	// Register for F4SE messages
 	message->RegisterListener([](F4SE::MessagingInterface::Message* msg) -> void {
-		// TTS_TRACE writes straight to tts-trace.log through Win32, so unlike the
-		// spdlog logger (flush_on(warn)) it survives an abrupt process death.
-		// That matters here: the previous run died with a completely empty
-		// TrueThroughScope.log, so we could not tell whether TTS ever initialised.
 		if (msg->type == F4SE::MessagingInterface::kGameDataReady) {
-			TTS_TRACE("MSG-TRACE: kGameDataReady ENTER");
 			// Game data is ready - this is when we should initialize
 			ThroughScope::upscalerModular = LoadLibraryA("Data/F4SE/Plugins/Fallout4Upscaler.dll");
-			TTS_TRACE("MSG-TRACE: Fallout4Upscaler LoadLibraryA done");
 			logger::info("TrueThroughScope: Game data ready, initializing plugin");
 			ThroughScope::d3dHooks->Initialize();
-			TTS_TRACE("MSG-TRACE: d3dHooks->Initialize() done");
 			InitializePlugin();
-			TTS_TRACE("MSG-TRACE: InitializePlugin() done");
+
+			// 激光调试模式（已修复，默认关闭）
+			// ThroughScope::SetLaserInvestigationMode(true);
 		} else if (msg->type == F4SE::MessagingInterface::kPostLoadGame) {
-			TTS_TRACE("MSG-TRACE: kPostLoadGame ENTER");
 			logger::info("TrueThroughScope: Load a save, reset scope status");
 			ThroughScope::ImGuiManager::GetSingleton()->ForceHideCursor();
 			ResetFirstSpawnState();
-			TTS_TRACE("MSG-TRACE: kPostLoadGame done");
 		}
 		else if (msg->type == F4SE::MessagingInterface::kNewGame)
 		{
-			TTS_TRACE("MSG-TRACE: kNewGame ENTER");
 			ResetFirstSpawnState();
-			TTS_TRACE("MSG-TRACE: kNewGame done");
 		}
 	});
 
