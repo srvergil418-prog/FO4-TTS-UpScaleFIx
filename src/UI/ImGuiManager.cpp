@@ -294,11 +294,15 @@ namespace ThroughScope
 					while (count < 0 && safety++ < 50) count = REX::W32::ShowCursor(TRUE);
 				}
 			} else {
-				if (m_BorrowedCursor) {
-					m_BorrowedCursor = false;
-				} else {
-					REX::W32::ShowCursor(FALSE);
-				}
+				// ShowCursor 是【计数器】：TRUE 加 1、FALSE 减 1，返回新计数，
+				// 计数 >= 0 时光标可见。原文这里只清 m_BorrowedCursor 而不把计数
+				// 还回去 —— 如果打开菜单时计数本来 >= 0（光标本来就可见），关闭后
+				// 计数仍 >= 0，鼠标指针就留在屏幕上（用户实测：F2 关掉后指针不消失）。
+				//
+				// ForceHideCursor() 已经是"把计数压到 < 0"的正确实现（带安全上限），
+				// 但它原先只在窗口失焦时被调用，正常关菜单不会走到。这里直接用它。
+				m_BorrowedCursor = false;
+				ForceHideCursor();
 			}
 
 			auto input = RE::BSInputDeviceManager::GetSingleton();
