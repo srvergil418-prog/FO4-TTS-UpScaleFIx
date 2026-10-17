@@ -6,6 +6,7 @@
 #include "NiFLoader.h"
 
 #include "D3DHooks.h"
+#include "GlobalTypes.h"   // g_ScopeViewProjMat / g_ScopeViewProjMatValid
 
 #include <cmath>
 #include <map>
@@ -195,6 +196,22 @@ namespace ThroughScope
 
 		// 清理D3D相关资源
 		// ThroughScope::D3DHooks::CleanupStaticResources();
+
+		// 复位"已保存瞄具投影矩阵"标志。
+		//
+		// g_ScopeViewProjMatValid 在 SecondPassRenderer 每次渲染画中画后被设为 true，
+		// 而全代码里没有任何一处把它设回 false。于是切枪（尤其是切到没有瞄具的武器
+		// 再切回来）之后，hkBSSkyShader_SetupGeometry 里
+		//     if (!g_ScopeViewProjMatValid) { 走原始函数 }
+		// 这个"没有有效矩阵就跳过"的分支永远进不去，天空/瞄具会用上一把枪残留的
+		// viewProjMat 去绘制 —— 表现就是"瞄具上没有 TTS 效果，但屏幕上方冒出一块
+		// 位置不对的 TTS 画面"，而手动"重新加载 TTS"能好（因为它重建了矩阵）。
+		// 清理瞄具资源时一并作废这两个标志，下一次渲染会重新计算。
+		if (g_ScopeViewProjMatValid || g_ScopePreviousViewProjMatValid) {
+			g_ScopeViewProjMatValid = false;
+			g_ScopePreviousViewProjMatValid = false;
+			logger::info("CleanupScopeResources: scope viewProj matrices invalidated");
+		}
 
 	}
 
