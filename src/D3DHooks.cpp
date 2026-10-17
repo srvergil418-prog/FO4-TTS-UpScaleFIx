@@ -1218,6 +1218,10 @@ namespace ThroughScope {
 			D3D11_VIEWPORT oldViewports[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
 			pContext->RSGetViewports(&numViewports, oldViewports);
 
+			// RT4's real dimensions, hoisted out of the diagnostics block below so the
+			// viewport set further down can use them.
+			UINT rt4W = 0, rt4H = 0;
+
 			// RT4's real dimensions decide which viewport the scope quad needs.
 			// The quad's vertices come from the game, which drew them against the
 			// internal render resolution (1920x1080 in this install) while the swap
@@ -1228,7 +1232,6 @@ namespace ThroughScope {
 			{
 				Microsoft::WRL::ComPtr<ID3D11Resource> rt4Res;
 				Microsoft::WRL::ComPtr<ID3D11Texture2D> rt4Tex;
-				UINT rt4W = 0, rt4H = 0;
 				if (rt4RTV) {
 					rt4RTV->GetResource(rt4Res.GetAddressOf());
 					if (rt4Res && SUCCEEDED(rt4Res.As(&rt4Tex))) {
@@ -1270,10 +1273,29 @@ namespace ThroughScope {
 
 			Microsoft::WRL::ComPtr<ID3D11DepthStencilState> stencilWriteDSS;
 			if (SUCCEEDED(device->CreateDepthStencilState(&dssDesc, stencilWriteDSS.GetAddressOf()))) {
-				// 设置 viewport (关键：使用 scope quad 检测时捕获的原始 viewport)
-				// 这样顶点坐标变换与游戏原始渲染一致，即使 RT4 尺寸不同
-				// D3D11 的 viewport 变换会自动处理坐标映射
-				if (s_HasScopeQuadViewport) {
+				// Viewport for drawing the scope quad.
+				//
+				// The old code repeated the viewport captured while the GAME drew the
+				// quad -- that is the internal resolution (1920x1080 with DLSS/FSR
+				// active), while we are drawing into RT4 at its full size
+				// (3840x2160). A half-sized viewport over a full-sized target lands
+				// the picture in the top-left quarter, which is exactly what the user
+				// sees (and why it shrinks further as the upscaler preset gets more
+				// aggressive: the captured viewport gets smaller, RT4 does not).
+				//
+				// Match the bound render target instead. The quad's vertices are
+				// projected through this viewport, so using RT4's size fills the whole
+				// target, and the upscaler then scales the complete image on present.
+				if (rt4W > 0 && rt4H > 0) {
+					D3D11_VIEWPORT rt4Viewport{};
+					rt4Viewport.TopLeftX = 0.0f;
+					rt4Viewport.TopLeftY = 0.0f;
+					rt4Viewport.Width    = static_cast<float>(rt4W);
+					rt4Viewport.Height   = static_cast<float>(rt4H);
+					rt4Viewport.MinDepth = 0.0f;
+					rt4Viewport.MaxDepth = 1.0f;
+					pContext->RSSetViewports(1, &rt4Viewport);
+				} else if (s_HasScopeQuadViewport) {
 					pContext->RSSetViewports(1, &s_ScopeQuadOriginalViewport);
 				}
 				{
@@ -1281,14 +1303,16 @@ namespace ThroughScope {
 					// picture lands in a corner of the screen instead of inside the
 					// lens, the viewport here is the first thing to check.
 					char stBuf[260];
+					UINT vpCount2 = 1;
+					D3D11_VIEWPORT nowVp{};
+					pContext->RSGetViewports(&vpCount2, &nowVp);
 					sprintf_s(stBuf,
-					          "ST2-TRACE: draw with vp TL=(%.1f,%.1f) WH=(%.1fx%.1f) hasVp=%d | oldVp TL=(%.1f,%.1f) WH=(%.1fx%.1f) count=%u",
-					          s_ScopeQuadOriginalViewport.TopLeftX, s_ScopeQuadOriginalViewport.TopLeftY,
+					          "ST2-TRACE: draw vp WH=(%.1fx%.1f) | RT4 WH=(%ux%u) | capturedVp WH=(%.1fx%.1f) hasVp=%d | oldVp WH=(%.1fx%.1f)",
+					          nowVp.Width, nowVp.Height,
+					          rt4W, rt4H,
 					          s_ScopeQuadOriginalViewport.Width, s_ScopeQuadOriginalViewport.Height,
 					          (int)s_HasScopeQuadViewport,
-					          oldViewports[0].TopLeftX, oldViewports[0].TopLeftY,
-					          oldViewports[0].Width, oldViewports[0].Height,
-					          (unsigned)numViewports);
+					          oldViewports[0].Width, oldViewports[0].Height);
 					TTS_TRACE(stBuf);
 				}
 				
