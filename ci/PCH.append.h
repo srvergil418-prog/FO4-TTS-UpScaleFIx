@@ -607,11 +607,27 @@ BytePad<0x20> pad_580;         // 580
 	// ========================================================================
 	// BSRenderPass -- only forward-declared in powerof3 (BSShaderProperty.h:11).
 	// TTS touches pGeometry only.
+	//
+	// pGeometry sits at 0x18, NOT at 0. The previous version of this shim put it
+	// at offset 0, which aliased it onto pCommandBuffer: `if (!pass->pGeometry)`
+	// could no longer detect a bad pointer, and the following
+	// `pass->pGeometry->name.c_str()` / `->world.scale = ...` read and wrote a
+	// wild address. That is the crash inside hkBSSkyShader_SetupGeometry -- it
+	// dereferences pGeometry on every sky pass while the scope is rendering, and
+	// the fault surfaces inside STL string code because the poisoned pointer is
+	// first used as a NiObjectNET name.
+	//
+	// Layout taken from the author's PDB (typeIndex 0x2d0d1, size 0x226, 24 members):
+	//   +0000 pCommandBuffer  +0008 pShader        +0010 pShaderProperty
+	//   +0018 pGeometry       +0020 pInstanceGroupPass
+	//   +0028 pDebrisInstanceGroupPass  +0030 ppSceneLights
+	//   +0038 pNext           +0040 pPassGroupNext +0048 uiPassEnum ...
 	// ========================================================================
 	class BSRenderPass
 	{
 	public:
-		BSGeometry* pGeometry;   // PDB/usage: TTS reads ->name (NiObjectNET) and ->world.scale (NiAVObject)
+		BytePad<0x18>  pad0;        // 000 pCommandBuffer / pShader / pShaderProperty
+		BSGeometry*    pGeometry;   // 018  <- TTS reads ->name and ->world.scale
 	};
 
 	// ========================================================================
