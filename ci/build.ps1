@@ -711,10 +711,14 @@ if ($sp3 -eq $sp2) { throw 'SecondPassRenderer: SetCameraData block not found' }
 #     Context we already hold (the line above reads it back the same way).
 $sp4 = $sp3.Replace(
     "				RE::BSGraphics::Renderer::GetSingleton().SetPosAdjust(&scopePosAdjust);",
-    "				// build shim: Renderer::GetSingleton() is not present in powerof3.`r`n" +
-    "				// Write through the Context we already hold (read back the same way`r`n" +
-    "				// two lines above).`r`n" +
-    "				context->shadowState.PosAdjust = scopePosAdjust;")
+    "				// [TTS CI] SUSPECT UNDER TEST: this is the only place where we`r`n" +
+    "				// compute an offset ourselves and write straight into the render`r`n" +
+    "				// context. A wrong offset scribbles over the renderer's own state,`r`n" +
+    "				// and the crash logs put the fault inside d3d11.dll reached from the`r`n" +
+    "				// second pass -- which fits that. PosAdjust only shifts the weapon`r`n" +
+    "				// model for parallax, so skipping it costs at most a slight gun`r`n" +
+    "				// offset. Restore if crashes continue (that clears this suspect).`r`n" +
+    "				(void)scopePosAdjust;")
 if ($sp4 -eq $sp3) { throw 'SecondPassRenderer: Renderer::GetSingleton block not found' }
 
 Set-Content $spr -Value $sp4 -NoNewline -Encoding utf8
