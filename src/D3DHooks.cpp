@@ -1,8 +1,6 @@
 #include "D3DHooks.h"
 #include "Utilities.h"
 #include "GlobalTypes.h"
-#include "TTSTrace.h"   // always-flushed trace: crash logs only give DLL+<rva>
-#include <cstdio>       // sprintf_s for the viewport diagnostics
 #include <detours.h>
 #include <imgui.h>
 #include <imgui_impl_dx11.h>
@@ -302,73 +300,32 @@ namespace ThroughScope {
 	
 	UINT D3DHooks::GetDrawIndexedIndex(ID3D11DeviceContext* context)
 	{
-		// This hunts for the DrawIndexed slot of the D3D11 device-context vtable by
-		// matching a 5-byte opcode pattern. Two things are wrong with doing that
-		// naively, and both are worth guarding:
-		//
-		//  1. "mov rax,[rcx]; call [rax+..]" is the standard shape of a COM method
-		//     that dispatches through its own vtable, so the pattern is NOT specific
-		//     to DrawIndexed. Matching the wrong slot would install the hook on an
-		//     unrelated method, and then every DrawIndexed call would land in the
-		//     wrong function with mismatched arguments -- the kind of corruption
-		//     that shows up later as a crash somewhere else entirely.
-		//  2. CreateBuffer's result was never checked, so a failure would hand a
-		//     null buffer to IASetIndexBuffer.
-		//
-		// The D3D11 spec fixes DrawIndexed at vtable index 12, so treat 12 as the
-		// expectation and only accept a scan hit that confirms it. Report the
-		// outcome through the trace channel, because "which index did it actually
-		// pick" is exactly what decides whether the hook is trustworthy.
-		if (!context || !m_Device) {
-			TTS_TRACE("DI-IDX: context or device is null -> using index 12");
-			return 12;
-		}
-
+		// 创建测试资源
 		D3D11_BUFFER_DESC desc = { 0 };
 		desc.ByteWidth = 1024;
 		desc.BindFlags = D3D11_BIND_INDEX_BUFFER;
 
 		ID3D11Buffer* testBuffer = nullptr;
-		const HRESULT hr = m_Device->CreateBuffer(&desc, nullptr, &testBuffer);
-		if (FAILED(hr) || !testBuffer) {
-			char b[128];
-			sprintf_s(b, "DI-IDX: CreateBuffer failed (hr=0x%08X) -> using index 12", (unsigned)hr);
-			TTS_TRACE(b);
-			return 12;
-		}
+		m_Device->CreateBuffer(&desc, nullptr, &testBuffer);
 
+		// 设置测试状态
 		context->IASetIndexBuffer(testBuffer, DXGI_FORMAT_R16_UINT, 0);
 
-		const BYTE drawCallPattern[] = { 0x48, 0x8B, 0x01, 0xFF, 0x90 };
-		UINT found = UINT32_MAX;
-		UINT hits = 0;
+		// 特征码扫描
+		const BYTE drawCallPattern[] = { 0x48, 0x8B, 0x01, 0xFF, 0x90 };  // mov rax,[rcx]; call [rax+...]
+
 		for (UINT i = 0; i < 100; i++) {
 			void* func = reinterpret_cast<void**>(*reinterpret_cast<void***>(context))[i];
-			if (func && memcmp(func, drawCallPattern, sizeof(drawCallPattern)) == 0) {
-				if (hits == 0) { found = i; }
-				++hits;
+
+			if (memcmp(func, drawCallPattern, sizeof(drawCallPattern)) == 0) {
+				logger::info("Found DrawIndexed at index {}", i);
+				testBuffer->Release();
+				return i;
 			}
 		}
 
-		{
-			char b[200];
-			sprintf_s(b, "DI-IDX: pattern hits=%u firstHit=%d -> chosen index %u (spec expects 12)",
-			          (unsigned)hits, (found == UINT32_MAX ? -1 : (int)found),
-			          (hits > 0 && found == 12) ? 12u : 12u);
-			TTS_TRACE(b);
-		}
-
 		testBuffer->Release();
-
-		// Only trust the scan when it agrees with the spec; otherwise the pattern
-		// matched something that is not DrawIndexed and hooking it would corrupt
-		// every draw call.
-		if (hits > 0 && found == 12) {
-			logger::info("Found DrawIndexed at index 12 (confirmed by scan)");
-			return 12;
-		}
-		logger::info("DrawIndexed scan inconclusive (hits={}, first={}) - using spec index 12", hits, (int)found);
-		return 12;
+		return 12;  // 默认值
 	}
 
 	bool isRenderDocDll = false;
@@ -491,26 +448,15 @@ namespace ThroughScope {
 
     void WINAPI D3DHooks::hkDrawIndexed(ID3D11DeviceContext* pContext, UINT IndexCount, UINT StartIndexLocation, INT BaseVertexLocation)
 	{
-		// DI-TRACE: Buffout attributes the ADS crash to TrueThroughScope.dll+0014169,
-		// reached from the DrawTriShape/DrawIndexed hook. hkDrawIndexed fires for
-		// every draw call in the frame (thousands), so tracing is gated on the
-		// scope-quad branch only and capped, otherwise the log is useless within
-		// one frame.
 		if (isSelfDrawCall)
 			return phookD3D11DrawIndexed(pContext, IndexCount, StartIndexLocation, BaseVertexLocation);
 
 		bool isScopeQuad = IsScopeQuadBeingDrawn(pContext, IndexCount);
 
 		if (isScopeQuad) {
-			static std::uint32_t s_diTraceBudget = 60;
-			const bool traceThis = (s_diTraceBudget > 0);
-			if (traceThis) { --s_diTraceBudget; TTS_TRACE("DI-TRACE: B scope quad detected"); }
-
 			D3DPERF_BeginEvent(0xFFFF00FF, L"TTS_ScopeQuad_Detected");
 
-			if (traceThis) { TTS_TRACE("DI-TRACE: C before CacheAllStates"); }
 			CacheAllStates();
-			if (traceThis) { TTS_TRACE("DI-TRACE: D after CacheAllStates"); }
 			
 			// 保存索引数量用于后续 SetScopeTexture 绘制
 			s_ScopeQuadIndexCount = IndexCount;
@@ -520,48 +466,17 @@ namespace ThroughScope {
 			// 保存当前 viewport (Upscaling 兼容)
 			// 顶点坐标是基于这个 viewport 计算的，渲染到 RT4 时需要使用相同的 viewport
 			UINT vpCount = 1;
-			if (traceThis) { TTS_TRACE("DI-TRACE: E before RSGetViewports"); }
 			pContext->RSGetViewports(&vpCount, &s_ScopeQuadOriginalViewport);
 			s_HasScopeQuadViewport = (vpCount > 0);
-			if (traceThis) {
-				char vpBuf[220];
-				sprintf_s(vpBuf,
-				          "DI-TRACE: V captured viewport  TL=(%.1f,%.1f)  WH=(%.1fx%.1f)  depth=(%.2f..%.2f)  vpCount=%u",
-				          s_ScopeQuadOriginalViewport.TopLeftX, s_ScopeQuadOriginalViewport.TopLeftY,
-				          s_ScopeQuadOriginalViewport.Width, s_ScopeQuadOriginalViewport.Height,
-				          s_ScopeQuadOriginalViewport.MinDepth, s_ScopeQuadOriginalViewport.MaxDepth,
-				          (unsigned)vpCount);
-				TTS_TRACE(vpBuf);
-			}
-			if (traceThis) { TTS_TRACE("DI-TRACE: F after RSGetViewports"); }
 			
 			D3DPERF_EndEvent();
-			if (traceThis) { TTS_TRACE("DI-TRACE: G after D3DPERF_EndEvent"); }
-
-			const bool menuOpen = ImGuiManager::GetSingleton()->IsMenuOpen();
-			if (traceThis) { TTS_TRACE(menuOpen ? "DI-TRACE: H IsMenuOpen=TRUE" : "DI-TRACE: H IsMenuOpen=false"); }
-
-			if (menuOpen) {
-				const bool inAds = Utilities::IsPlayerInADS();
-				if (traceThis) { TTS_TRACE(inAds ? "DI-TRACE: I IsPlayerInADS=TRUE" : "DI-TRACE: I IsPlayerInADS=false"); }
-				if (!inAds) {
-					return phookD3D11DrawIndexed(pContext, IndexCount, StartIndexLocation, BaseVertexLocation);
-				}
+			
+			if (ImGuiManager::GetSingleton()->IsMenuOpen() && !Utilities::IsPlayerInADS()) {
+				return phookD3D11DrawIndexed(pContext, IndexCount, StartIndexLocation, BaseVertexLocation);
 			}
-
-			if (traceThis) { TTS_TRACE("DI-TRACE: J returning (skip original draw)"); }
+			
 			return;  // 跳过原始绘制，后续在 SetScopeTexture 中用自定义 shader 绘制
 		} else {
-			// The non-scope-quad path is the overwhelmingly common one (every other
-			// draw call in the frame), so it never had a trace line -- which is why
-			// a crash inside it would have looked like "hkDrawIndexed finished fine".
-			// It forwards through the MinHook trampoline, so an invalid trampoline
-			// faults here too. Own budget, own tag.
-			static std::uint32_t s_diElseBudget = 120;
-			if (s_diElseBudget > 0) {
-				--s_diElseBudget;
-				TTS_TRACE("DI-TRACE: K else-branch -> original DrawIndexed");
-			}
 			return phookD3D11DrawIndexed(pContext, IndexCount, StartIndexLocation, BaseVertexLocation);
 		}
 	}
@@ -1218,42 +1133,6 @@ namespace ThroughScope {
 			D3D11_VIEWPORT oldViewports[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
 			pContext->RSGetViewports(&numViewports, oldViewports);
 
-			// RT4's real dimensions, hoisted out of the diagnostics block below so the
-			// viewport set further down can use them.
-			UINT rt4W = 0, rt4H = 0;
-
-			// RT4's real dimensions decide which viewport the scope quad needs.
-			// The quad's vertices come from the game, which drew them against the
-			// internal render resolution (1920x1080 in this install) while the swap
-			// chain presents at 3840x2160. Drawing those vertices through a
-			// 3840x2160 viewport scales the picture 2x, which is the "large area in
-			// a corner" the user sees. Knowing RT4's size tells us which of the two
-			// is right -- do not guess it.
-			{
-				Microsoft::WRL::ComPtr<ID3D11Resource> rt4Res;
-				Microsoft::WRL::ComPtr<ID3D11Texture2D> rt4Tex;
-				if (rt4RTV) {
-					rt4RTV->GetResource(rt4Res.GetAddressOf());
-					if (rt4Res && SUCCEEDED(rt4Res.As(&rt4Tex))) {
-						D3D11_TEXTURE2D_DESC rt4Desc{};
-						rt4Tex->GetDesc(&rt4Desc);
-						rt4W = rt4Desc.Width;
-						rt4H = rt4Desc.Height;
-					}
-				}
-				char rtBuf[300];
-				// State::GetSingleton() returns a reference, not a pointer (same as L894).
-				const auto& rtState = RE::BSGraphics::State::GetSingleton();
-				sprintf_s(rtBuf,
-				          "ST-TRACE: RT4 WH=(%ux%u) | capturedScopeVp WH=(%.1fx%.1f) hasVp=%d | curVp WH=(%.1fx%.1f) count=%u | backBuffer=%ux%u",
-				          rt4W, rt4H,
-				          s_ScopeQuadOriginalViewport.Width, s_ScopeQuadOriginalViewport.Height, (int)s_HasScopeQuadViewport,
-				          oldViewports[0].Width, oldViewports[0].Height, (unsigned)numViewports,
-				          (unsigned)rtState.backBufferWidth,
-				          (unsigned)rtState.backBufferHeight);
-				TTS_TRACE(rtBuf);
-			}
-
 			// 创建写入 stencil 和深度的 DSS
 			// 深度测试总是通过，这样 ScopeQuad 不会被场景深度遮挡
 			// 但我们仍然写入深度，以便后续效果（如景深、SSAO）可以正确处理瞄具区域
@@ -1273,47 +1152,11 @@ namespace ThroughScope {
 
 			Microsoft::WRL::ComPtr<ID3D11DepthStencilState> stencilWriteDSS;
 			if (SUCCEEDED(device->CreateDepthStencilState(&dssDesc, stencilWriteDSS.GetAddressOf()))) {
-				// Viewport for drawing the scope quad.
-				//
-				// The old code repeated the viewport captured while the GAME drew the
-				// quad -- that is the internal resolution (1920x1080 with DLSS/FSR
-				// active), while we are drawing into RT4 at its full size
-				// (3840x2160). A half-sized viewport over a full-sized target lands
-				// the picture in the top-left quarter, which is exactly what the user
-				// sees (and why it shrinks further as the upscaler preset gets more
-				// aggressive: the captured viewport gets smaller, RT4 does not).
-				//
-				// Match the bound render target instead. The quad's vertices are
-				// projected through this viewport, so using RT4's size fills the whole
-				// target, and the upscaler then scales the complete image on present.
-				if (rt4W > 0 && rt4H > 0) {
-					D3D11_VIEWPORT rt4Viewport{};
-					rt4Viewport.TopLeftX = 0.0f;
-					rt4Viewport.TopLeftY = 0.0f;
-					rt4Viewport.Width    = static_cast<float>(rt4W);
-					rt4Viewport.Height   = static_cast<float>(rt4H);
-					rt4Viewport.MinDepth = 0.0f;
-					rt4Viewport.MaxDepth = 1.0f;
-					pContext->RSSetViewports(1, &rt4Viewport);
-				} else if (s_HasScopeQuadViewport) {
+				// 设置 viewport (关键：使用 scope quad 检测时捕获的原始 viewport)
+				// 这样顶点坐标变换与游戏原始渲染一致，即使 RT4 尺寸不同
+				// D3D11 的 viewport 变换会自动处理坐标映射
+				if (s_HasScopeQuadViewport) {
 					pContext->RSSetViewports(1, &s_ScopeQuadOriginalViewport);
-				}
-				{
-					// What the scope quad is actually being drawn with. If the scope
-					// picture lands in a corner of the screen instead of inside the
-					// lens, the viewport here is the first thing to check.
-					char stBuf[260];
-					UINT vpCount2 = 1;
-					D3D11_VIEWPORT nowVp{};
-					pContext->RSGetViewports(&vpCount2, &nowVp);
-					sprintf_s(stBuf,
-					          "ST2-TRACE: draw vp WH=(%.1fx%.1f) | RT4 WH=(%ux%u) | capturedVp WH=(%.1fx%.1f) hasVp=%d | oldVp WH=(%.1fx%.1f)",
-					          nowVp.Width, nowVp.Height,
-					          rt4W, rt4H,
-					          s_ScopeQuadOriginalViewport.Width, s_ScopeQuadOriginalViewport.Height,
-					          (int)s_HasScopeQuadViewport,
-					          oldViewports[0].Width, oldViewports[0].Height);
-					TTS_TRACE(stBuf);
 				}
 				
 				// 绑定 RT4 + 支持 stencil 的 DSV
@@ -1409,14 +1252,9 @@ namespace ThroughScope {
 
 		auto playerChar = RE::PlayerCharacter::GetSingleton();
 		if (uMsg == WM_MOUSEWHEEL && s_EnableFOVAdjustment && playerChar && Utilities::IsInADS(playerChar)) {
-			// Acquire, not a bare null-check: the setup thread can free the node
-			// between the check and the use, which is the same use-after-free the
-			// scope render path suffers from. Hold the reference for the duration.
-			auto* scopeNode = ScopeCamera::AcquireScopeNode();
-			if (scopeNode) {
+			if (ScopeCamera::s_CurrentScopeNode) {
 				short wheelDelta = GET_WHEEL_DELTA_WPARAM(wParam);
 				ProcessMouseWheelFOVInput(wheelDelta);
-				ScopeCamera::ReleaseScopeNode(scopeNode);
 				return true;
 			}
 		}
@@ -1435,91 +1273,52 @@ namespace ThroughScope {
 
 	void WINAPI D3DHooks::hkRSSetViewports(ID3D11DeviceContext* pContext, UINT NumViewports, const D3D11_VIEWPORT* pViewports)
 	{
-		// TTS + upscaling (Upscaling Custom / DLSS / FSR) compatibility.
-		//
-		// During scope-camera rendering the ACTIVE render target can be smaller than
-		// the swap-chain back buffer: spatial upscaling renders the scene at an
-		// internal resolution and only presents at output size.
-		//
-		// The previous code compared the incoming viewport against the swap-chain
-		// back buffer (output size, e.g. 3840x2160). Seeing the internal viewport
-		// (e.g. 1920x1080) as "too small", it replaced it with the output size --
-		// which on a smaller render target draws into the top-left corner only.
-		// That is precisely the reported symptom, and it gets worse as the
-		// upscaler preset lowers the internal resolution further.
-		//
-		// Correct against the texture ACTUALLY bound as render target instead.
-		// (Approach from the community viewport-compatibility patch.)
+		// 如果正在进行瞄具渲染，确保使用正确的全屏viewport
+		// 这样可以防止其他MOD（如BakaFullscreenPipboy）的viewport修改影响瞄具渲染
 		if (ScopeCamera::IsRenderingForScope() && NumViewports > 0 && pViewports != nullptr) {
-			Microsoft::WRL::ComPtr<ID3D11RenderTargetView> activeRTV;
-			pContext->OMGetRenderTargets(1, activeRTV.GetAddressOf(), nullptr);
+			// 获取swap chain的后台缓冲区尺寸来确定正确的viewport
+			Microsoft::WRL::ComPtr<ID3D11Device> device;
+			pContext->GetDevice(&device);
 
-			if (activeRTV) {
-				Microsoft::WRL::ComPtr<ID3D11Resource> activeResource;
-				activeRTV->GetResource(activeResource.GetAddressOf());
+			if (device && s_SwapChain) {
+				Microsoft::WRL::ComPtr<ID3D11Texture2D> backBuffer;
+				if (SUCCEEDED(s_SwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&backBuffer))) {
+					D3D11_TEXTURE2D_DESC desc;
+					backBuffer->GetDesc(&desc);
 
-				Microsoft::WRL::ComPtr<ID3D11Texture2D> activeTexture;
-				if (activeResource && SUCCEEDED(activeResource.As(&activeTexture))) {
-					D3D11_TEXTURE2D_DESC desc{};
-					activeTexture->GetDesc(&desc);
+					// 检查传入的viewport是否与预期的全屏viewport匹配
+					// 如果不匹配（可能被其他MOD修改了），则强制使用正确的全屏viewport
+					const D3D11_VIEWPORT& vp = pViewports[0];
+					bool needsCorrection = false;
 
-					if (desc.Width > 0 && desc.Height > 0) {
-						const D3D11_VIEWPORT& vp = pViewports[0];
-						const bool needsCorrection =
-							vp.Width < static_cast<float>(desc.Width) * 0.9f ||
-							vp.Height < static_cast<float>(desc.Height) * 0.9f ||
-							vp.TopLeftX < 0.0f || vp.TopLeftY < 0.0f ||
-							vp.TopLeftX > static_cast<float>(desc.Width) * 0.1f ||
-							vp.TopLeftY > static_cast<float>(desc.Height) * 0.1f;
+					// 检查viewport是否明显偏离全屏设置
+					if (vp.Width < desc.Width * 0.9f || vp.Height < desc.Height * 0.9f ||
+						vp.TopLeftX > desc.Width * 0.1f || vp.TopLeftY > desc.Height * 0.1f) {
+						needsCorrection = true;
+					}
 
-						{
-							// The scope picture landing in one corner means the quad was
-							// drawn with a viewport that does not match the bound render
-							// target. Log the two sets of numbers the decision is made
-							// from, so we can tell "correctly corrected" from "wrongly
-							// corrected".
-							char vpBuf2[300];
-							sprintf_s(vpBuf2,
-							          "VP-TRACE: scopeRender=1 incoming TL=(%.1f,%.1f) WH=(%.1fx%.1f) | RT WH=(%ux%u) | needsCorrection=%d",
-							          vp.TopLeftX, vp.TopLeftY, vp.Width, vp.Height,
-							          desc.Width, desc.Height, (int)needsCorrection);
-							TTS_TRACE(vpBuf2);
-						}
+					if (needsCorrection) {
+						// 创建正确的全屏viewport
+						D3D11_VIEWPORT fullViewport;
+						fullViewport.TopLeftX = 0.0f;
+						fullViewport.TopLeftY = 0.0f;
+						fullViewport.Width = static_cast<float>(desc.Width);
+						fullViewport.Height = static_cast<float>(desc.Height);
+						fullViewport.MinDepth = 0.0f;
+						fullViewport.MaxDepth = 1.0f;
 
-						// NOTE: this used to rewrite the incoming viewport to the bound
-						// render target's full size whenever it looked "too small".
-						// That is exactly what an upscaler does on purpose: render the
-						// scene into a smaller internal viewport and stretch it at
-						// present time. Overriding it makes the scope picture land in a
-						// corner AND breaks the renderer's own assumptions, which is a
-						// plausible source of the later memory corruption.
-						//
-						// So: observe only, never override. The game knows which
-						// viewport it is drawing with; we do not have enough information
-						// to overrule it. Set TTS_VIEWPORT_OVERRIDE to 1 to restore the
-						// old behaviour when comparing.
-						constexpr bool kOverrideViewport = false;
-						if (needsCorrection && kOverrideViewport) {
-							D3D11_VIEWPORT targetViewport{};
-							targetViewport.TopLeftX = 0.0f;
-							targetViewport.TopLeftY = 0.0f;
-							targetViewport.Width = static_cast<float>(desc.Width);
-							targetViewport.Height = static_cast<float>(desc.Height);
-							targetViewport.MinDepth = 0.0f;
-							targetViewport.MaxDepth = 1.0f;
-							return phookD3D11RSSetViewports(pContext, 1, &targetViewport);
-						}
+						// 使用正确的全屏viewport
+						return phookD3D11RSSetViewports(pContext, 1, &fullViewport);
 					}
 				}
 			}
 		}
 
-		// If the active target cannot be queried, pass the engine/upscaler viewport
-		// through unchanged rather than falling back to the display resolution.
+		// 正常情况下透传调用
 		return phookD3D11RSSetViewports(pContext, NumViewports, pViewports);
 	}
 
-void D3DHooks::ProcessGamepadFOVInput()
+	void D3DHooks::ProcessGamepadFOVInput()
 	{
 		// 先通过游戏的输入管理器检测手柄是否连接
 		auto inputMgr = RE::BSInputDeviceManager::GetSingleton();
