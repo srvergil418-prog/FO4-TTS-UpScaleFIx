@@ -1,7 +1,6 @@
 // EventHandler.cpp
 #include "EventHandler.h"
 #include "DataPersistence.h"
-#include "TTSTrace.h"   // always-flushed trace for crash triage
 #include <NiFLoader.h>
 #include "D3DHooks.h"
 #include "ScopeCamera.h"
@@ -225,23 +224,7 @@ namespace ThroughScope
 
 	bool AnimationGraphEventWatcher::Initialize()
 	{
-		// [TTS CI] The original body was:
-		//     ((AnimationGraphEventWatcher*)((uint64_t)PlayerCharacter::GetSingleton() + 0x38))
-		//         ->RegisterForEvents();
-		// which treats PlayerCharacter+0x38 as a BSAnimationGraphEvent sink and
-		// hooks vtable+0x8, assuming that slot is ProcessEvent. That assumption does
-		// not hold on 1.10.163: Actor's base list has no
-		// BSTEventSink<BSAnimationGraphEvent> at all (master and dev-1.10.163 agree
-		// on the layout), so slot 1 belongs to some other virtual function. The
-		// hooked vtable is only ever exercised by animation-graph events, which is
-		// exactly what a weapon swap raises -- so the bad call surfaces as
-		// "swap weapon away and back, then crash", with an access violation and no
-		// IDDB dialog.
-		//
-		// Nothing of value is lost by not installing it: the whole payload of the
-		// hook (the weaponDraw handling) is commented out in hkProcessEvent, leaving
-		// only a pass-through to the original. Skipping the hook leaves that
-		// pass-through path intact, since we simply never replace the slot.
+		((AnimationGraphEventWatcher*)((uint64_t)PlayerCharacter::GetSingleton() + 0x38))->RegisterForEvents();
 		isQuerySpawnNode = false;
 		return true;
 	}
@@ -256,43 +239,31 @@ namespace ThroughScope
 
 	RE::BSEventNotifyControl AnimationGraphEventWatcher::hkProcessEvent(RE::BSAnimationGraphEvent& evn, RE::BSTEventSource<RE::BSAnimationGraphEvent>* src)
 	{
-		// AG-TRACE: this fires on every animation-graph event, which is precisely
-		// what a weapon swap produces -- and the repro is "swap the weapon away and
-		// back, then it crashes". Every step below dereferences something that can
-		// be bad: *(uint64_t*)this (the object's vtable), evn.tag, and fn (the saved
-		// original). Capped so the log stays readable.
-		static std::uint32_t s_agTraceBudget = 120;
-		const bool traceThis = (s_agTraceBudget > 0);
-		if (traceThis) { --s_agTraceBudget; TTS_TRACE("AG-TRACE: A enter hkProcessEvent"); }
-
-		// Was: fnHash.at(*(uint64_t*)this). unordered_map::at throws
-		// std::out_of_range when the key is missing and nothing here catches it,
-		// so any vtable we did not register would abort the process. If the vtable
-		// genuinely is not registered we cannot call through safely -- pass through.
-		auto it = fnHash.find(*(uint64_t*)this);
-		if (it == fnHash.end()) {
-			if (traceThis) { TTS_TRACE("AG-TRACE: B vtable NOT registered -> pass through"); }
-			return RE::BSEventNotifyControl::kContinue;
-		}
-		if (traceThis) { TTS_TRACE("AG-TRACE: B vtable registered"); }
-
-		FnProcessEvent fn = it->second;
-
-		if (traceThis) { TTS_TRACE("AG-TRACE: C before reading evn.tag"); }
+		FnProcessEvent fn = fnHash.at(*(uint64_t*)this);
 		std::string eventName = evn.tag.data();
-		(void)eventName;  // only consumed by the disabled logging below
-		if (traceThis) { TTS_TRACE("AG-TRACE: D got event tag"); }
+		// logger::info("Event Name: {}", eventName.c_str());
+		// Get current weapon info including available modifications
+		
+		//if (std::strcmp(eventName.c_str(), "weaponDraw") == 0)
+		//{
+		//	ScopeCamera::CleanupScopeResources();
+		//	auto weaponInfo = DataPersistence::GetCurrentWeaponInfo();
+		//	if (weaponInfo.currentConfig) {
+		//		ScopeCamera::SetupScopeForWeapon(weaponInfo);
+		//		isQuerySpawnNode = false;
+		//		if (!ScopeCamera::hasFirstSpawnNode) {
+		//			ScopeCamera::hasFirstSpawnNode = true;
+		//			logger::warn("FirstSpawn Finish: AnimationGraphEventWatcher");
+		//		}
+		//		
+		//	} else {
+		//		// No configuration found - do nothing as requested
+		//		logger::info("No scope configuration found for this weapon - no action taken");
+		//	}
+		//}
+		
 
-		if (!fn) {
-			if (traceThis) { TTS_TRACE("AG-TRACE: E fn null -> continue"); }
-			return RE::BSEventNotifyControl::kContinue;
-		}
-		if (traceThis) { TTS_TRACE("AG-TRACE: E calling original ProcessEvent"); }
-
-		auto result = (this->*fn)(evn, src);
-
-		if (traceThis) { TTS_TRACE("AG-TRACE: F original returned"); }
-		return result;
+		return fn ? (this->*fn)(evn, src) : BSEventNotifyControl::kContinue;
 	}
 
 	void AnimationGraphEventWatcher::RegisterForEvents()
