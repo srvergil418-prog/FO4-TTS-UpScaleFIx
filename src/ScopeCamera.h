@@ -2,7 +2,6 @@
 
 #include "Constants.h"
 #include <RE/NetImmerse/NiCamera.hpp>
-#include <mutex>   // ScopeNodeMutex: guards s_CurrentScopeNode across threads
 
 #include "DataPersistence.h"
 
@@ -39,52 +38,6 @@ namespace ThroughScope
 		static void SetupScopeForWeapon(const DataPersistence::WeaponInfo& weaponInfo);
 		static int GetScopeNodeIndexCount();
 		static void CleanupScopeResources();
-
-		// Thread-safe access to s_CurrentScopeNode.
-		//
-		// Why this exists: EquipWatcher runs its delayed setup on its OWN thread
-		// (EventHandler.cpp DelayedSetupScopeForWeapon) and calls
-		// CleanupScopeResources() from there, which does DecRefCount() and then
-		// nulls the static. The render path reads that same static every frame.
-		// Nothing synchronises the two -- the mutex inside EquipWatcher only
-		// guards EquipWatcher's own state -- so the render thread can read a
-		// non-null pointer and then use an object the setup thread has already
-		// destroyed (DecRefCount hitting zero deletes it). That is a
-		// use-after-free, and it surfaces as a crash inside library
-		// string/memory routines, because the node being walked is gone.
-		//
-		// AcquireScopeNode takes a reference under the lock, so the node cannot be
-		// torn down while the render thread is using it. Pair every acquire with
-		// ReleaseScopeNode.
-		static RE::NiNode* AcquireScopeNode();
-		static void ReleaseScopeNode(RE::NiNode* a_node);
-		static std::mutex& ScopeNodeMutex();
-
-		// Big lock covering "rebuild the scope node" against "walk the scope node".
-		//
-		// Holding a reference (AcquireScopeNode) keeps the node object alive, but it
-		// does NOT stop another thread from mutating its children while the render
-		// thread is iterating them. Rebuilding does exactly that: LoadNIF, then
-		// name/transform, then weaponNode->AttachChild(), then Update(). A walk that
-		// crosses that mutation reads freed child pointers -- the crash lands inside
-		// library code, and the attached model disappears because the tree it hung
-		// off was rebuilt underneath it.
-		//
-		// Rebuilds happen on weapon swaps (EquipWatcher's own thread and the main
-		// thread's HK PCUpdate path), while walks happen every frame on the render
-		// thread. They must not overlap. Recursive because a rebuild path may call
-		// helpers that also take it.
-		static std::recursive_mutex& ScopeRebuildMutex();
-
-		// Atomically replace s_CurrentScopeNode: drop the reference held by the old
-		// node and take over the caller's reference to the new one.
-		//
-		// The UI panels (CameraAdjustmentPanel / ModelSwitcherPanel) used to assign
-		// to the static directly when the user switched scope models. That both
-		// leaked the previous node (nothing released it) and raced the render
-		// thread, in exactly the way that made weapon swaps crash. Route those
-		// assignments through here instead.
-		static void PublishScopeNode(RE::NiNode* a_node);
 		static void RestoreZoomDataForCurrentWeapon();  // 恢复ZoomData的方法
         // Get target FOV
         static float GetTargetFOV() { return s_TargetFOV; }
