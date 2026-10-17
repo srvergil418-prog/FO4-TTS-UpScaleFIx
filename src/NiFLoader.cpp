@@ -65,10 +65,19 @@ namespace
 			                  (mbi.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ |
 			                                  PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY));
 
+			// 读出函数首 24 字节：Create 与 Load 的 prolog 会不一样，
+			// 这是运行时区分两个 ID 的办法（exe 文件加壳，静态反汇编读不到代码）。
+			char code[24 * 3 + 1] = { 0 };
+			for (int i = 0; i < 24 && addr + i >= 0x10000; ++i) {
+				char one[8];
+				sprintf_s(one, "%02X ", *reinterpret_cast<const unsigned char*>(addr + i));
+				strcat_s(code, one);
+			}
+
 			sprintf_s(buf,
 				"%s\n  addr=0x%llX  baseOff=0x%llX  libOffset=0x%llX  offsetMatch=%s\n"
 				"  VirtualQueryRet=%llu  State=0x%X  Protect=0x%X  Type=0x%X  allocBase=0x%llX\n"
-				"  => %s\n\n",
+				"  => %s\n  head24: %s\n\n",
 				label,
 				(unsigned long long)addr,
 				(unsigned long long)(addr - exeBase),
@@ -79,7 +88,8 @@ namespace
 				q == sizeof(mbi) ? mbi.Protect : 0u,
 				q == sizeof(mbi) ? mbi.Type : 0u,
 				q == sizeof(mbi) ? (unsigned long long)mbi.BaseAddress : 0ull,
-				exec ? "EXECUTABLE -> points at code" : "NOT executable -> data or invalid");
+				exec ? "EXECUTABLE -> points at code" : "NOT executable -> data or invalid",
+				code);
 			write(buf);
 		};
 
