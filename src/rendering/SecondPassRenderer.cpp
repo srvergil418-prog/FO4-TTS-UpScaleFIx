@@ -1,6 +1,8 @@
 #include "SecondPassRenderer.h"
 #include "GlobalTypes.h"
 #include "HookManager.h"
+#include "TTSTrace.h"   // always-flushed trace: crash logs only give DLL+<rva>
+#include <cstdio>       // sprintf_s for the diagnostics
 
 #include "RenderTargetMerger.h"
 #include "RE/Bethesda/ImageSpaceManager.hpp"
@@ -47,8 +49,24 @@ namespace ThroughScope
 	bool SecondPassRenderer::ExecuteSecondPass()
 	{
 		if (!CanExecuteSecondPass()) {
-
+			// Silent per-frame failure. If the scope never becomes "ready" this is
+			// where every frame dies, which means the picture-in-picture never draws
+			// at all -- and the render path keeps spinning on the failure. Record the
+			// transition once so the trace shows whether the scope ever got ready.
+			static bool s_reportedNotReady = false;
+			if (!s_reportedNotReady) {
+				s_reportedNotReady = true;
+				TTS_TRACE("SP-TRACE: CanExecuteSecondPass=false -> second pass never runs (scope not ready)");
+			}
 			return false;
+		}
+
+		{
+			static bool s_reportedReady = false;
+			if (!s_reportedReady) {
+				s_reportedReady = true;
+				TTS_TRACE("SP-TRACE: CanExecuteSecondPass=true -> second pass executing");
+			}
 		}
 			
 		// 初始化相机指针
@@ -127,28 +145,47 @@ namespace ThroughScope
 
 	bool SecondPassRenderer::CanExecuteSecondPass() const
 	{
+		// Each early return here is silent, and the caller only logs a single
+		// "SecondPassRenderer failed" line. When this returns false every frame the
+		// picture-in-picture simply never draws -- while the render hook keeps
+		// spinning. Name the failing check once per session so the trace says which.
+		//
 		// 检查渲染状态
 		// 注意：移除了 IsEnableRender 检查，因为它在主线程设置，可能与渲染线程有竞争
 		if (!m_renderStateMgr->IsScopeReady() || !m_renderStateMgr->IsRenderReady()) {
+			static bool s1 = false;
+			if (!s1) { s1 = true;
+				char b[180];
+				sprintf_s(b, "SP-TRACE: blocked: IsScopeReady=%d IsRenderReady=%d",
+				          (int)m_renderStateMgr->IsScopeReady(), (int)m_renderStateMgr->IsRenderReady());
+				TTS_TRACE(b);
+			}
 			return false;
 		}
 
 		// 检查瞄具相机
 		auto scopeCamera = ScopeCamera::GetScopeCamera();
 		if (!scopeCamera || !scopeCamera->parent) {
+			static bool s2 = false;
+			if (!s2) { s2 = true;
+				TTS_TRACE(scopeCamera ? "SP-TRACE: blocked: scopeCamera has no parent"
+				                      : "SP-TRACE: blocked: scopeCamera is null");
+			}
 			return false;
 		}
 
 		// 检查玩家相机
 		auto playerCamera = *ptr_DrawWorldCamera;
 		if (!playerCamera) {
-
+			static bool s3 = false;
+			if (!s3) { s3 = true; TTS_TRACE("SP-TRACE: blocked: playerCamera is null"); }
 			return false;
 		}
 
 		// 检查D3D资源
 		if (!ValidateD3DResources()) {
-
+			static bool s4 = false;
+			if (!s4) { s4 = true; TTS_TRACE("SP-TRACE: blocked: ValidateD3DResources failed"); }
 			return false;
 		}
 		return true;
