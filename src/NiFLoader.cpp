@@ -49,7 +49,7 @@ namespace
 		};
 
 		char buf[640];
-		auto* const exeBase = reinterpret_cast<std::uintptr_t>(::GetModuleHandleA(nullptr));
+		const std::uintptr_t exeBase = reinterpret_cast<std::uintptr_t>(::GetModuleHandleA(nullptr));
 		sprintf_s(buf,
 			"=== TTS REL::ID probe (read-only) ===\n"
 			"Fallout4 base = 0x%llX\n\n",
