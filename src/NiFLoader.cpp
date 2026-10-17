@@ -133,23 +133,12 @@ NiNode* NIFLoader::LoadNIF(const char* filePath)
 {
 	ProbeRelocations();
 
-	// 走真 BSStream 路径。ID 身份已由 tts-probe.txt 的 head24 确认：
-	//   - 999778 是构造函数（push rbx / mov rbx,rcx / 设置 vtable）
-	//   - 678544 是 Load(const char*) 的转发 thunk（xor r8d,r8d / jmp 160035）
-	// 所以 Create == new 0x708 + 调 999778，见 ci/PCH.append.h。
-	BSStream* stream = BSStream::Create();
-	if (!stream) {
-		logger::error("Failed to create BSStream for: {}", filePath);
-		return nullptr;
-	}
-	if (!stream->Load(filePath)) {
-		logger::error("BSStream::Load failed for: {}", filePath);
-		return nullptr;
-	}
-
-	NiNode* rootNode = stream->GetTopLevelNode();
+	// 回到 BSModelDB —— 这是用户实测"恢复正常"的那条路径（#181）。
+	// BSStream 直调那版会让整个 TTS 失效（#177），虽然 ID 身份已由 head24 弄清，
+	// 但把两件事（换加载器 + 修切枪 bug）绑在一起做是错的：一轮只改一个变量。
+	NiNode* rootNode = LoadModelViaModelDB(filePath);
 	if (!rootNode) {
-		logger::error("Failed to get root NiNode from BSStream: {}", filePath);
+		logger::error("Failed to load NIF file: {}", filePath);
 		return nullptr;
 	}
 	return rootNode;
