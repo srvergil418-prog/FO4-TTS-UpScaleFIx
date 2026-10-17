@@ -596,12 +596,33 @@ BytePad<0x20> pad_580;         // 580
 		static_assert(offsetof(TTSShadowStatePlaceholder, CameraData) == 0x000, "CameraData must be 0x000");
 		static_assert(offsetof(TTSShadowStatePlaceholder, PosAdjust) == 0x210, "PosAdjust must be 0x210");
 
+		// shadowState sits at Context+0x2240 on 1.10.163, NOT at 0.
+		//
+		// Evidence (author DLL, hkBSSkyShader_SetupGeometry, real RVA 0x86800):
+		//   +0x07c  48 8b 99 20 0b 00 00   mov rbx, [rcx+0xB20]      ; context = *(TLS+0xB20)
+		//   +0x0d3  0f 10 bb 10 23 00 00   movups xmm7,  [rbx+0x2310] ; backupViewProjMat[0]
+		//   +0x0e0  44 0f 10 83 20 23 00 00 movups xmm8, [rbx+0x2320] ; [1]
+		//   +0x0ee  44 0f 10 8b 30 23 00 00 movups xmm9, [rbx+0x2330] ; [2]
+		//   +0x0fc  44 0f 10 93 40 23 00 00 movups xmm10,[rbx+0x2340] ; [3]
+		// viewProjMat is at CameraData+0xD0 and CameraData is at shadowState+0, so
+		//   shadowState = 0x2310 - 0xD0 = 0x2240.
+		//
+		// Note this DIFFERS from the NG/AE layout exposed by master/libxse, where
+		// Context::shadowState is 0x1B70. Do not "fix" this back to 0x1B70.
+		//
+		// With the old offset 0, `context->shadowState.CameraData.viewProjMat`
+		// aliased Context::deferredContext (an ID3D11DeviceContext*), so TTS read a
+		// garbage matrix and then WROTE a matrix into the D3D11 device context --
+		// the scope mesh tore/deformed and the game crashed. It only happened after
+		// a weapon swap because g_ScopeViewProjMatValid gates this block, and that
+		// flag only becomes true once the scope has rendered at least once.
 		class TTSContextPlaceholder
 		{
 		public:
-			TTSShadowStatePlaceholder shadowState;   // 0000
+			BytePad<0x2240>          pad_Context;     // 0000 .. 223F (deferredContext, constant buffers, miscConstantGroup)
+			TTSShadowStatePlaceholder shadowState;    // 2240
 		};
-		static_assert(offsetof(TTSContextPlaceholder, shadowState) == 0x0000, "TTSContextPlaceholder::shadowState must be 0x0000");
+		static_assert(offsetof(TTSContextPlaceholder, shadowState) == 0x2240, "TTSContextPlaceholder::shadowState must be 0x2240 (OG layout; NG is 0x1B70)");
 	}
 
 	// ========================================================================
