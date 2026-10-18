@@ -746,6 +746,25 @@ namespace ThroughScope
 		}
 	}
 
+	// 按名字子串在玩家 3D 树里找节点（"Lense:0" 等）
+	static RE::NiAVObject* FindNodeByName(RE::PlayerCharacter* a_char, const char* a_sub)
+	{
+		RE::NiAVObject* found = nullptr;
+		if (!a_char || !a_char->Get3D() || !a_sub) return nullptr;
+		std::function<void(RE::NiAVObject*, int)> walk = [&](RE::NiAVObject* obj, int depth) {
+			if (!obj || depth > 14 || found) return;
+			const char* nm = obj->name.c_str();
+			if (nm && *nm && strstr(nm, a_sub)) { found = obj; return; }
+			if (auto* node = obj->IsNode()) {
+				for (auto& child : node->children) {
+					if (child) walk(child.get(), depth + 1);
+				}
+			}
+		};
+		walk(a_char->Get3D(), 0);
+		return found;
+	}
+
 	// [RETICLE 诊断] 递归打印节点树（不改任何数据）
 	static void DumpTree(RE::NiAVObject* a_obj, int a_depth, int& a_count)
 	{
@@ -840,41 +859,41 @@ namespace ThroughScope
 		// 当玩家处于隐身状态时，禁用 scope 渲染相关的几何体过滤以避免 D3D11 崩溃
 		g_scopeRenderMgr->UpdateChameleonStatus();
 
-		// ===== [RETICLE 诊断] 只记录，不修改任何节点 =====
-		// 目的：分清"镜片里什么都没有"是 STS 本身如此，还是我们挪坏了节点。
-		// 每次进开镜打印一次：相机世界变换 + 整个 Weapon 子树。
+		// ===== [RETICLE] 开镜时隐藏原准星（屏幕层会画一个钉死在中心的替代品）=====
+		// 这条链路已验证过：SetAppCulled(true) 生效且保持，用户肉眼确认准星消失。
 		{
 			static bool s_lastADS = false;
-			static int s_dumpCount = 0;
+			static int s_frame = 0;
+			static int s_logCount = 0;
 			const bool ads = IsInADS(pChar);
 			g_reticleVerifyADS = ads;
 			const bool changed = (ads != s_lastADS);
+			if (ads) s_frame++;
 
-			if (ads && changed && s_dumpCount < 8) {
-				s_dumpCount++;
-
-				auto* cam = RE::PlayerCamera::GetSingleton();
-				if (cam && cam->cameraRoot) {
-					const auto& cw = cam->cameraRoot->world;
-					ReticleVerifyLog("[CAM] pos=(%.2f,%.2f,%.2f) r0=(%.3f,%.3f,%.3f) r1=(%.3f,%.3f,%.3f) r2=(%.3f,%.3f,%.3f)",
-						cw.translate.x, cw.translate.y, cw.translate.z,
-						cw.rotate.entry[0].x, cw.rotate.entry[0].y, cw.rotate.entry[0].z,
-						cw.rotate.entry[1].x, cw.rotate.entry[1].y, cw.rotate.entry[1].z,
-						cw.rotate.entry[2].x, cw.rotate.entry[2].y, cw.rotate.entry[2].z);
-				} else {
-					ReticleVerifyLog("[CAM] cameraRoot NULL");
-				}
-
-				int count = 0;
-				if (auto* root3d = pChar->Get3D(); root3d) {
-					if (auto* weapon = root3d->GetObjectByName("Weapon")) {
-						DumpTree(weapon, 0, count);
-						ReticleVerifyLog("[TREE] done, %d nodes", count);
-					} else {
-						ReticleVerifyLog("[TREE] no Weapon node");
+			if (ads && (changed || (s_frame % 15) == 0)) {
+				// 每 15 帧重跑：切枪会重建武器 3D，新节点的 cull 标记是干净的
+				if (auto* ret = FindReticleNode(pChar)) {
+					if (!ret->GetAppCulled()) {
+						ret->SetAppCulled(true);
+						if (s_logCount < 20) {
+							s_logCount++;
+							ReticleVerifyLog("[CULL] hid %s", ret->name.c_str());
+						}
 					}
+				} else if (changed) {
+					ReticleVerifyLog("[CULL] no reticle node");
+				}
+			}
+
+			// 记录镜片位置，后面做圆形遮罩要用（世界坐标是"眼睛空间"）
+			if (ads && changed && s_logCount < 20) {
+				s_logCount++;
+				if (auto* lense = FindNodeByName(pChar, "Lense")) {
+					const RE::NiPoint3 w = lense->world.translate;
+					ReticleVerifyLog("[LENSE] world=(%.2f,%.2f,%.2f) scale=%.3f",
+						w.x, w.y, w.z, lense->world.scale);
 				} else {
-					ReticleVerifyLog("[TREE] no Get3D");
+					ReticleVerifyLog("[LENSE] not found");
 				}
 			}
 
@@ -883,7 +902,7 @@ namespace ThroughScope
 				s_lastADS = ads;
 			}
 		}
-		// ===== [RETICLE 诊断] 结束 =====
+		// ===== [RETICLE] 结束 =====
 
 		auto weaponInfo = DataPersistence::GetCurrentWeaponInfo();
 
