@@ -33,6 +33,11 @@ namespace ThroughScope
 
 	// [RETICLE ??] ADS ????? ThroughScope ??D3DHooks.cpp / ImGuiManager.cpp ??? extern ???
 	bool g_reticleVerifyADS = false;
+
+	// 准星圆形遮罩（屏幕像素）：主线程每帧算好，D3D 层读
+	float g_reticleMaskCX = 0.0f;
+	float g_reticleMaskCY = 0.0f;
+	float g_reticleMaskR = 0.0f;
 	using namespace Utilities;
 	using namespace RE;
 
@@ -746,6 +751,46 @@ namespace ThroughScope
 		}
 	}
 
+	static RE::NiAVObject* FindNodeByName(RE::PlayerCharacter* a_char, const char* a_sub);
+
+	// 把镜片节点的世界位置投影成屏幕圆（像素）
+	// 武器树用的是"眼睛空间"：原点≈眼睛，+Z 为前向（由实测 world.z 恒 ~119 得出）
+	static void UpdateReticleMask(RE::PlayerCharacter* a_char)
+	{
+		g_reticleMaskR = 0.0f;
+		auto* cam = RE::PlayerCamera::GetSingleton();
+		if (!cam) return;
+		auto* lense = FindNodeByName(a_char, "Lense");
+		if (!lense) return;
+
+		const RE::NiPoint3 p = lense->world.translate;
+		const float z = p.z;
+		if (z < 1.0f) return;
+
+		float fovDeg = cam->firstPersonFOV;
+		if (fovDeg < 5.0f || fovDeg > 175.0f) fovDeg = 70.0f;
+		const float fovRad = fovDeg * 3.14159265f / 180.0f;
+		const float tanHalfV = std::tan(fovRad * 0.5f);
+		if (tanHalfV < 1e-4f) return;
+
+		auto* gs = RE::BSGraphics::State::GetSingleton();
+		if (!gs) return;
+		const float W = static_cast<float>(gs->backBufferWidth);
+		const float H = static_cast<float>(gs->backBufferHeight);
+		if (W < 1.0f || H < 1.0f) return;
+		const float tanHalfH = tanHalfV * (W / H);
+
+		const float ndcX = (p.x / z) / tanHalfH;
+		const float ndcY = (p.y / z) / tanHalfV;
+		g_reticleMaskCX = (ndcX * 0.5f + 0.5f) * W;
+		g_reticleMaskCY = (0.5f - ndcY * 0.5f) * H;
+
+		const float radiusWorld = lense->worldBound.fRadius;
+		float rPix = (radiusWorld / z) * (H * 0.5f) / tanHalfV;
+		if (!(rPix > 1.0f) || rPix > H) rPix = 0.0f;
+		g_reticleMaskR = rPix;
+	}
+
 	// 按名字子串在玩家 3D 树里找节点（"Lense:0" 等）
 	static RE::NiAVObject* FindNodeByName(RE::PlayerCharacter* a_char, const char* a_sub)
 	{
@@ -869,6 +914,11 @@ namespace ThroughScope
 			g_reticleVerifyADS = ads;
 			const bool changed = (ads != s_lastADS);
 			if (ads) s_frame++;
+
+			if (ads) {
+				// 每帧更新：镜片随武器晃，投影要跟着动
+				UpdateReticleMask(pChar);
+			}
 
 			if (ads && (changed || (s_frame % 15) == 0)) {
 				// 每 15 帧重跑：切枪会重建武器 3D，新节点的 cull 标记是干净的
