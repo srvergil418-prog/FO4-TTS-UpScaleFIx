@@ -1,4 +1,3 @@
-namespace ThroughScope { extern bool g_reticleVerifyADS; }
 #include "ImGuiManager.h"
 
 namespace ThroughScope
