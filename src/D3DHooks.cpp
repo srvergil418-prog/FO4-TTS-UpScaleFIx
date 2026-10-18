@@ -1545,6 +1545,12 @@ float4 main(float4 pos : SV_POSITION, float2 uv : TEXCOORD0) : SV_Target {
 
 		static void Draw(IDXGISwapChain* pSwapChain)
 		{
+			// 现在準星走 3D 节点对齐（RenderHooks.cpp: AlignReticleToCamera），
+			// 屏幕叠加会把准星画到镜筒外面，所以默认关闭。
+			// 想对比两种效果时把它改成 true。
+			static constexpr bool kScreenOverlay = false;
+			if (!kScreenOverlay) return;
+
 			if (!g_reticleVerifyADS) return;
 
 			ID3D11Device* dev = nullptr;
