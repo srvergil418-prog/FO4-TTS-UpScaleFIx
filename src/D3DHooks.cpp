@@ -1293,7 +1293,7 @@ namespace ThroughScope {
 			float screenW, screenH;
 			float centerX, centerY;
 			float boxW, boxH;
-			float alphaPad, pad1;
+			float alphaMul, pad1;
 		};
 
 		static ID3D11VertexShader* s_vs = nullptr;
@@ -1302,11 +1302,18 @@ namespace ThroughScope {
 		static ID3D11BlendState* s_blend = nullptr;
 		static ID3D11DepthStencilState* s_ds = nullptr;
 		static ID3D11RasterizerState* s_rs = nullptr;
+		static ID3D11SamplerState* s_sampler = nullptr;
+		static ID3D11ShaderResourceView* s_srv = nullptr;
+		static bool s_texFromFile = false;
 		static ID3D11Texture2D* s_bbTex = nullptr;
 		static ID3D11RenderTargetView* s_bbRTV = nullptr;
 		static bool s_tried = false;
 		static bool s_ok = false;
 		static int s_logCount = 0;
+
+		// 准星贴图：优先读 mod 里的 DDS（MO2 的 VFS 会把 Data\... 映射进虚拟目录），
+		// 读不到就退化成 1x1 纯绿纹理 —— 一眼就能区分"贴图没加载"和"没画出来"。
+		static const char* kReticlePath = "Data\\Textures\\TTS\\Reticle\\CSResRetGerman1.dds";
 
 		static void Log(const char* fmt, ...)
 		{
@@ -1327,32 +1334,83 @@ namespace ThroughScope {
 		}
 
 		static const char* kVS = R"(
-struct VSOut { float4 pos : SV_POSITION; };
+struct VSOut { float4 pos : SV_POSITION; float2 uv : TEXCOORD0; };
 cbuffer Cb : register(b0) {
-    float screenW, screenH, centerX, centerY, boxW, boxH, alphaPad, pad1;
+    float screenW, screenH, centerX, centerY, boxW, boxH, alphaMul, pad1;
 };
 VSOut main(uint id : SV_VertexID) {
-    float2 c[4] = { float2(-0.5,-0.5), float2(0.5,-0.5), float2(-0.5,0.5), float2(0.5,0.5) };
+    float2 c[4]  = { float2(-0.5,-0.5), float2(0.5,-0.5), float2(-0.5,0.5), float2(0.5,0.5) };
+    float2 uv[4] = { float2(0.0,1.0),  float2(1.0,1.0),  float2(0.0,0.0), float2(1.0,0.0) };
     float2 px = float2(centerX, centerY) + c[id] * float2(boxW, boxH);
     VSOut o;
     o.pos = float4( px.x / screenW * 2.0 - 1.0,
                     1.0 - px.y / screenH * 2.0,
                     0.5, 1.0 );
+    o.uv = uv[id];
     return o;
 }
 )";
 
 		static const char* kPS = R"(
 cbuffer Cb : register(b0) {
-    float screenW, screenH, centerX, centerY, boxW, boxH, alphaPad, pad1;
+    float screenW, screenH, centerX, centerY, boxW, boxH, alphaMul, pad1;
 };
-float4 main() : SV_Target {
-    return float4(0.0, 1.0, 0.0, 1.0);
+Texture2D    gTex  : register(t0);
+SamplerState gSamp : register(s0);
+float4 main(float4 pos : SV_POSITION, float2 uv : TEXCOORD0) : SV_Target {
+    float4 c = gTex.Sample(gSamp, uv);
+    return float4(c.rgb, c.a * alphaMul);
 }
 )";
 
 		typedef HRESULT(WINAPI* D3DCompile_t)(LPCVOID, SIZE_T, LPCSTR, const D3D_SHADER_MACRO*,
 			ID3DInclude*, LPCSTR, LPCSTR, UINT, UINT, ID3DBlob**, ID3DBlob**);
+
+		// 从 DDS 读准星贴图（MO2 的 VFS 会把 Data\... 映射进虚拟目录）
+		static HRESULT LoadReticleFromFile(ID3D11Device* dev)
+		{
+			wchar_t wpath[MAX_PATH] = {};
+			if (::MultiByteToWideChar(CP_ACP, 0, kReticlePath, -1, wpath, MAX_PATH) <= 0)
+				return E_FAIL;
+
+			ID3D11ShaderResourceView* srv = nullptr;
+			HRESULT hr = DirectX::CreateDDSTextureFromFile(dev, wpath, nullptr, &srv);
+			if (SUCCEEDED(hr) && srv) {
+				s_srv = srv;
+				s_texFromFile = true;
+				return S_OK;
+			}
+			if (srv) srv->Release();
+			return FAILED(hr) ? hr : E_FAIL;
+		}
+
+		// 1x1 纯绿兜底纹理
+		static HRESULT CreateSolidGreenSRV(ID3D11Device* dev)
+		{
+			const uint32_t px = 0xFF00FF00;  // R8G8B8A8: R=0 G=255 B=0 A=255
+			D3D11_TEXTURE2D_DESC td = {};
+			td.Width = 1;
+			td.Height = 1;
+			td.MipLevels = 1;
+			td.ArraySize = 1;
+			td.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+			td.SampleDesc.Count = 1;
+			td.Usage = D3D11_USAGE_IMMUTABLE;
+			td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+			D3D11_SUBRESOURCE_DATA init = {};
+			init.pSysMem = &px;
+			init.SysMemPitch = sizeof(px);
+
+			ID3D11Texture2D* tex = nullptr;
+			HRESULT hr = dev->CreateTexture2D(&td, &init, &tex);
+			if (FAILED(hr) || !tex) return FAILED(hr) ? hr : E_FAIL;
+
+			hr = dev->CreateShaderResourceView(tex, nullptr, &s_srv);
+			tex->Release();
+			s_texFromFile = false;
+			return hr;
+		}
 
 		static bool Init(ID3D11Device* dev)
 		{
@@ -1399,13 +1457,43 @@ float4 main() : SV_Target {
 				return false;
 			}
 
-			// 不透明绘制：先确认"能不能看见"，贴图阶段再换成 alpha 混合
+			// 准星是带 alpha 的贴图：常规 SrcAlpha/InvSrcAlpha 混合
 			D3D11_BLEND_DESC bd = {};
-			bd.RenderTarget[0].BlendEnable = FALSE;
+			bd.RenderTarget[0].BlendEnable = TRUE;
+			bd.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
+			bd.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+			bd.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+			bd.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
+			bd.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_ZERO;
+			bd.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
 			bd.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
 			if (FAILED(dev->CreateBlendState(&bd, &s_blend))) {
 				Log("[ReticleBox] CreateBlendState FAILED");
 				return false;
+			}
+
+			D3D11_SAMPLER_DESC sd = {};
+			sd.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+			sd.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
+			sd.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+			sd.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+			sd.ComparisonFunc = D3D11_COMPARISON_NEVER;
+			sd.MinLOD = 0.0f;
+			sd.MaxLOD = D3D11_FLOAT32_MAX;
+			if (FAILED(dev->CreateSamplerState(&sd, &s_sampler))) {
+				Log("[ReticleBox] CreateSamplerState FAILED");
+				return false;
+			}
+
+			// 准星贴图（失败退化成 1x1 纯绿，便于区分"贴图没读到"）
+			if (FAILED(LoadReticleFromFile(dev))) {
+				Log("[ReticleBox] reticle DDS failed: %s -> fallback GREEN", kReticlePath);
+				if (FAILED(CreateSolidGreenSRV(dev))) {
+					Log("[ReticleBox] fallback green SRV FAILED");
+					return false;
+				}
+			} else {
+				Log("[ReticleBox] reticle DDS loaded: %s", kReticlePath);
 			}
 
 			D3D11_DEPTH_STENCIL_DESC dd = {};
@@ -1488,6 +1576,8 @@ float4 main() : SV_Target {
 				ID3D11Buffer* oldVB = nullptr;
 				ID3D11Buffer* oldCBS[1] = {};
 				ID3D11Buffer* oldPSCBS[1] = {};
+				ID3D11ShaderResourceView* oldSRVs[2] = {};
+				ID3D11SamplerState* oldSamps[1] = {};
 				UINT oldStride = 0, oldOffset = 0;
 				D3D11_PRIMITIVE_TOPOLOGY oldTopo = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
 				ID3D11RasterizerState* oldRS = nullptr;
@@ -1501,6 +1591,8 @@ float4 main() : SV_Target {
 				ctx->PSGetShader(&oldPS, nullptr, nullptr);
 				ctx->VSGetConstantBuffers(0, 1, oldCBS);
 				ctx->PSGetConstantBuffers(0, 1, oldPSCBS);
+				ctx->PSGetShaderResources(0, 2, oldSRVs);
+				ctx->PSGetSamplers(0, 1, oldSamps);
 				ctx->IAGetInputLayout(&oldIL);
 				ctx->IAGetVertexBuffers(0, 1, &oldVB, &oldStride, &oldOffset);
 				ctx->IAGetPrimitiveTopology(&oldTopo);
@@ -1532,18 +1624,19 @@ float4 main() : SV_Target {
 				ctx->IASetVertexBuffers(0, 1, noVB, &zero, &zero);
 				ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
 
+				ReticleCB cbData = {};
+				cbData.screenW = (float)td.Width;
+				cbData.screenH = (float)td.Height;
+				cbData.centerX = (float)td.Width * 0.5f;
+				cbData.centerY = (float)td.Height * 0.5f;
+				cbData.boxW = (float)td.Height * 0.55f;
+				cbData.boxH = (float)td.Height * 0.55f;
+				cbData.alphaMul = 1.0f;
+				cbData.pad1 = 0.0f;
+
 				D3D11_MAPPED_SUBRESOURCE ms = {};
 				if (SUCCEEDED(ctx->Map(s_cb, 0, D3D11_MAP_WRITE_DISCARD, 0, &ms))) {
-					ReticleCB cb = {};
-					cb.screenW = (float)td.Width;
-					cb.screenH = (float)td.Height;
-					cb.centerX = (float)td.Width * 0.5f;
-					cb.centerY = (float)td.Height * 0.5f;
-					cb.boxW = 160.0f;
-					cb.boxH = 160.0f;
-					cb.alphaPad = 1.0f;
-					cb.pad1 = 0.0f;
-					memcpy(ms.pData, &cb, sizeof(cb));
+					memcpy(ms.pData, &cbData, sizeof(cbData));
 					ctx->Unmap(s_cb, 0);
 				}
 
@@ -1552,15 +1645,17 @@ float4 main() : SV_Target {
 				ctx->PSSetConstantBuffers(0, 1, cbs);
 				ctx->VSSetShader(s_vs, nullptr, 0);
 				ctx->PSSetShader(s_ps, nullptr, 0);
+				ctx->PSSetShaderResources(0, 1, &s_srv);
+				ctx->PSSetSamplers(0, 1, &s_sampler);
 
 				ctx->Draw(4, 0);
 
 				if (s_logCount < 5) {
 					s_logCount++;
-					Log("[ReticleBox] DRAW ok bb=%ux%u oldRTV=%p oldDSV=%p oldVP=%.0fx%.0f@%.0f,%.0f",
-						td.Width, td.Height, (void*)oldRTV, (void*)oldDSV,
-						(FLOAT)oldVp[0].Width, (FLOAT)oldVp[0].Height,
-						(FLOAT)oldVp[0].TopLeftX, (FLOAT)oldVp[0].TopLeftY);
+					Log("[ReticleBox] DRAW ok bb=%ux%u box=%.0f tex=%s oldRTV=%p oldDSV=%p oldVP=%.0fx%.0f",
+						td.Width, td.Height, (float)cbData.boxW, s_texFromFile ? "DDS" : "GREEN",
+						(void*)oldRTV, (void*)oldDSV,
+						(FLOAT)oldVp[0].Width, (FLOAT)oldVp[0].Height);
 				}
 
 				// ---- 恢复 ----
@@ -1568,6 +1663,9 @@ float4 main() : SV_Target {
 				ctx->PSSetShader(oldPS, nullptr, 0);
 				ctx->VSSetConstantBuffers(0, 1, oldCBS);
 				ctx->PSSetConstantBuffers(0, 1, oldPSCBS);
+				ID3D11ShaderResourceView* nullSRVs[2] = { nullptr, nullptr };
+				ctx->PSSetShaderResources(0, 2, (oldSRVs[0] || oldSRVs[1]) ? oldSRVs : nullSRVs);
+				if (oldSamps[0]) ctx->PSSetSamplers(0, 1, oldSamps);
 				ctx->IASetInputLayout(oldIL);
 				ctx->IASetVertexBuffers(0, 1, &oldVB, &oldStride, &oldOffset);
 				ctx->IASetPrimitiveTopology(oldTopo);
@@ -1581,6 +1679,9 @@ float4 main() : SV_Target {
 				if (oldPS) oldPS->Release();
 				if (oldCBS[0]) oldCBS[0]->Release();
 				if (oldPSCBS[0]) oldPSCBS[0]->Release();
+				if (oldSRVs[0]) oldSRVs[0]->Release();
+				if (oldSRVs[1]) oldSRVs[1]->Release();
+				if (oldSamps[0]) oldSamps[0]->Release();
 				if (oldIL) oldIL->Release();
 				if (oldVB) oldVB->Release();
 				if (oldRS) oldRS->Release();
