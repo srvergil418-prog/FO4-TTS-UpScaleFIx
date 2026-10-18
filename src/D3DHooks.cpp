@@ -1275,41 +1275,84 @@ namespace ThroughScope {
 	}
 
 	// ===========================================================================
-	// [RETICLE 验证] 纯色方块绘制（D3D11 直接画，不经过 ImGui）
+	// [RETICLE 验证] 屏幕中心绘制（D3D11 直绘，不经过 ImGui）
 	//
-	// 目的：确认能在【游戏画面】上绘制内容（而不是只在菜单里）。
-	// 位置固定在屏幕中心，仅在 ADS 时绘制。
-	//
-	// 实现：用 D3DCompile 运行时编译一段极简 shader，
-	//       用 4 个 SV_VertexID 生成的全屏四边形，配合居中的小 viewport 定位。
+	// 上一版在游戏画面里看不见，本版针对性做了三件事：
+	//   1) 显式把渲染目标切到 swapchain 的 backbuffer —— 不再依赖 Present 时刻
+	//      OM 里残留的是哪个 RT（TTS 自己会在 Present 前切换渲染目标）；
+	//   2) 显式关闭深度测试与背面剔除 —— 避免被残留的 depth buffer 丢弃；
+	//   3) 位置用常量缓冲在 NDC 里算，不依赖（也不修改）viewport。
+	// 诊断日志写到 E:\Custom Fallout4\reticle-box.txt
 	// ===========================================================================
 	extern bool g_reticleVerifyADS;
 
 	namespace ReticleBox
 	{
+		struct ReticleCB
+		{
+			float screenW, screenH;
+			float centerX, centerY;
+			float boxW, boxH;
+			float alphaPad, pad1;
+		};
+
 		static ID3D11VertexShader* s_vs = nullptr;
-		static ID3D11PixelShader*  s_ps = nullptr;
+		static ID3D11PixelShader* s_ps = nullptr;
+		static ID3D11Buffer* s_cb = nullptr;
+		static ID3D11BlendState* s_blend = nullptr;
+		static ID3D11DepthStencilState* s_ds = nullptr;
+		static ID3D11RasterizerState* s_rs = nullptr;
+		static ID3D11Texture2D* s_bbTex = nullptr;
+		static ID3D11RenderTargetView* s_bbRTV = nullptr;
 		static bool s_tried = false;
 		static bool s_ok = false;
+		static int s_logCount = 0;
 
-		typedef HRESULT(WINAPI* D3DCompile_t)(LPCVOID, SIZE_T, LPCSTR, const D3D_SHADER_MACRO*,
-			ID3DInclude*, LPCSTR, LPCSTR, UINT, UINT, ID3DBlob**, ID3DBlob**);
+		static void Log(const char* fmt, ...)
+		{
+			char buf[1024];
+			va_list args;
+			va_start(args, fmt);
+			vsnprintf_s(buf, sizeof(buf), _TRUNCATE, fmt, args);
+			va_end(args);
+			strcat_s(buf, "\r\n");
+			HANDLE h = ::CreateFileA("E:\\Custom Fallout4\\reticle-box.txt",
+				FILE_APPEND_DATA, FILE_SHARE_READ, nullptr,
+				OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+			if (h != INVALID_HANDLE_VALUE) {
+				DWORD w = 0;
+				::WriteFile(h, buf, (DWORD)strlen(buf), &w, nullptr);
+				::CloseHandle(h);
+			}
+		}
 
 		static const char* kVS = R"(
 struct VSOut { float4 pos : SV_POSITION; };
+cbuffer Cb : register(b0) {
+    float screenW, screenH, centerX, centerY, boxW, boxH, alphaPad, pad1;
+};
 VSOut main(uint id : SV_VertexID) {
-    float2 p[4] = { float2(-1,-1), float2(1,-1), float2(-1,1), float2(1,1) };
+    float2 c[4] = { float2(-0.5,-0.5), float2(0.5,-0.5), float2(-0.5,0.5), float2(0.5,0.5) };
+    float2 px = float2(centerX, centerY) + c[id] * float2(boxW, boxH);
     VSOut o;
-    o.pos = float4(p[id], 0.0, 1.0);
+    o.pos = float4( px.x / screenW * 2.0 - 1.0,
+                    1.0 - px.y / screenH * 2.0,
+                    0.5, 1.0 );
     return o;
 }
 )";
 
 		static const char* kPS = R"(
+cbuffer Cb : register(b0) {
+    float screenW, screenH, centerX, centerY, boxW, boxH, alphaPad, pad1;
+};
 float4 main() : SV_Target {
-    return float4(0.0, 1.0, 0.0, 0.85);
+    return float4(0.0, 1.0, 0.0, 1.0);
 }
 )";
+
+		typedef HRESULT(WINAPI* D3DCompile_t)(LPCVOID, SIZE_T, LPCSTR, const D3D_SHADER_MACRO*,
+			ID3DInclude*, LPCSTR, LPCSTR, UINT, UINT, ID3DBlob**, ID3DBlob**);
 
 		static bool Init(ID3D11Device* dev)
 		{
@@ -1317,37 +1360,98 @@ float4 main() : SV_Target {
 			s_tried = true;
 
 			HMODULE comp = ::LoadLibraryA("d3dcompiler_47.dll");
-			if (!comp) { logger::error("[ReticleBox] d3dcompiler_47.dll 加载失败"); return false; }
+			if (!comp) { Log("[ReticleBox] d3dcompiler_47.dll load FAILED"); return false; }
 			auto compile = (D3DCompile_t)::GetProcAddress(comp, "D3DCompile");
-			if (!compile) { logger::error("[ReticleBox] 找不到 D3DCompile"); return false; }
+			if (!compile) { Log("[ReticleBox] D3DCompile not found"); return false; }
 
 			ID3DBlob* vsBlob = nullptr;
 			ID3DBlob* psBlob = nullptr;
 			ID3DBlob* err = nullptr;
 
 			if (FAILED(compile(kVS, strlen(kVS), "ReticleBoxVS", nullptr, nullptr, "main", "vs_5_0", 0, 0, &vsBlob, &err))) {
-				logger::error("[ReticleBox] VS 编译失败: {}", err ? (const char*)err->GetBufferPointer() : "?");
+				Log("[ReticleBox] VS compile FAILED: %s", err ? (const char*)err->GetBufferPointer() : "?");
 				if (err) err->Release();
 				return false;
 			}
 			if (FAILED(compile(kPS, strlen(kPS), "ReticleBoxPS", nullptr, nullptr, "main", "ps_5_0", 0, 0, &psBlob, &err))) {
-				logger::error("[ReticleBox] PS 编译失败: {}", err ? (const char*)err->GetBufferPointer() : "?");
+				Log("[ReticleBox] PS compile FAILED: %s", err ? (const char*)err->GetBufferPointer() : "?");
 				if (err) err->Release();
 				if (vsBlob) vsBlob->Release();
 				return false;
 			}
 
-			if (FAILED(dev->CreateVertexShader(vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), nullptr, &s_vs)) ||
-				FAILED(dev->CreatePixelShader(psBlob->GetBufferPointer(), psBlob->GetBufferSize(), nullptr, &s_ps))) {
-				logger::error("[ReticleBox] 创建 shader 失败");
-				vsBlob->Release(); psBlob->Release();
+			HRESULT hrVs = dev->CreateVertexShader(vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), nullptr, &s_vs);
+			HRESULT hrPs = dev->CreatePixelShader(psBlob->GetBufferPointer(), psBlob->GetBufferSize(), nullptr, &s_ps);
+			vsBlob->Release();
+			psBlob->Release();
+			if (FAILED(hrVs) || FAILED(hrPs)) {
+				Log("[ReticleBox] Create*Shader FAILED vs=0x%08X ps=0x%08X", (unsigned)hrVs, (unsigned)hrPs);
 				return false;
 			}
 
-			vsBlob->Release();
-			psBlob->Release();
+			D3D11_BUFFER_DESC cbd = {};
+			cbd.ByteWidth = sizeof(ReticleCB);
+			cbd.Usage = D3D11_USAGE_DYNAMIC;
+			cbd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+			cbd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+			if (FAILED(dev->CreateBuffer(&cbd, nullptr, &s_cb))) {
+				Log("[ReticleBox] CreateBuffer(CB) FAILED");
+				return false;
+			}
+
+			// 不透明绘制：先确认"能不能看见"，贴图阶段再换成 alpha 混合
+			D3D11_BLEND_DESC bd = {};
+			bd.RenderTarget[0].BlendEnable = FALSE;
+			bd.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+			if (FAILED(dev->CreateBlendState(&bd, &s_blend))) {
+				Log("[ReticleBox] CreateBlendState FAILED");
+				return false;
+			}
+
+			D3D11_DEPTH_STENCIL_DESC dd = {};
+			dd.DepthEnable = FALSE;
+			dd.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
+			dd.DepthFunc = D3D11_COMPARISON_ALWAYS;
+			dd.StencilEnable = FALSE;
+			if (FAILED(dev->CreateDepthStencilState(&dd, &s_ds))) {
+				Log("[ReticleBox] CreateDepthStencilState FAILED");
+				return false;
+			}
+
+			D3D11_RASTERIZER_DESC rd = {};
+			rd.FillMode = D3D11_FILL_SOLID;
+			rd.CullMode = D3D11_CULL_NONE;
+			rd.DepthClipEnable = FALSE;
+			rd.ScissorEnable = FALSE;
+			if (FAILED(dev->CreateRasterizerState(&rd, &s_rs))) {
+				Log("[ReticleBox] CreateRasterizerState FAILED");
+				return false;
+			}
+
 			s_ok = true;
-			logger::info("[ReticleBox] shader 就绪");
+			Log("[ReticleBox] init OK (vs/ps/cb/blend/ds/rs)");
+			return true;
+		}
+
+		static bool EnsureBackBuffer(IDXGISwapChain* pSwapChain, ID3D11Device* dev)
+		{
+			ID3D11Texture2D* tex = nullptr;
+			if (FAILED(pSwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), (void**)&tex)) || !tex)
+				return false;
+
+			if (tex == s_bbTex && s_bbRTV) { tex->Release(); return true; }
+
+			// 尺寸或纹理变了：重建
+			if (s_bbRTV) { s_bbRTV->Release(); s_bbRTV = nullptr; }
+			if (s_bbTex) { s_bbTex->Release(); s_bbTex = nullptr; }
+
+			HRESULT hr = dev->CreateRenderTargetView(tex, nullptr, &s_bbRTV);
+			if (FAILED(hr)) {
+				Log("[ReticleBox] CreateRenderTargetView FAILED 0x%08X", (unsigned)hr);
+				tex->Release();
+				return false;
+			}
+			s_bbTex = tex;  // 接管引用
 			return true;
 		}
 
@@ -1361,74 +1465,132 @@ float4 main() : SV_Target {
 			dev->GetImmediateContext(&ctx);
 			if (!ctx) { dev->Release(); return; }
 
-			if (!Init(dev)) { ctx->Release(); dev->Release(); return; }
+			bool ok = true;
+			do {
+				if (!Init(dev)) { ok = false; break; }
+				if (!EnsureBackBuffer(pSwapChain, dev)) { ok = false; break; }
 
-			// 备份 viewport
-			UINT nVp = 1;
-			D3D11_VIEWPORT oldVp = {};
-			ctx->RSGetViewports(&nVp, &oldVp);
+				D3D11_TEXTURE2D_DESC td = {};
+				s_bbTex->GetDesc(&td);
 
-			// 屏幕中心 160x160 的视口
-			DXGI_SWAP_CHAIN_DESC sd = {};
-			if (FAILED(pSwapChain->GetDesc(&sd))) { ctx->Release(); dev->Release(); return; }
-			const float w = 160.0f, h = 160.0f;
-			D3D11_VIEWPORT vp = {};
-			vp.TopLeftX = (sd.BufferDesc.Width - w) * 0.5f;
-			vp.TopLeftY = (sd.BufferDesc.Height - h) * 0.5f;
-			vp.Width = w;
-			vp.Height = h;
-			vp.MinDepth = 0.0f;
-			vp.MaxDepth = 1.0f;
-			ctx->RSSetViewports(1, &vp);
+				// ---- 备份 ----
+				ID3D11RenderTargetView* oldRTV = nullptr;
+				ID3D11DepthStencilView* oldDSV = nullptr;
+				ctx->OMGetRenderTargets(1, &oldRTV, &oldDSV);
 
-			// 备份并设置着色器（不绑任何输入/缓冲，纯 ID 生成顶点）
-			ID3D11VertexShader* oldVS = nullptr;
-			ID3D11PixelShader* oldPS = nullptr;
-			ID3D11InputLayout* oldIL = nullptr;
-			ID3D11Buffer* oldVB = nullptr;
-			UINT oldStride = 0, oldOffset = 0;
-			D3D11_PRIMITIVE_TOPOLOGY oldTopo = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
-			ID3D11RasterizerState* oldRS = nullptr;
-			ID3D11BlendState* oldBS = nullptr;
-			FLOAT oldBlendFactor[4] = {};
-			UINT oldSampleMask = 0;
+				UINT nVp = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+				D3D11_VIEWPORT oldVp[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE] = {};
+				ctx->RSGetViewports(&nVp, oldVp);
 
-			ctx->VSGetShader(&oldVS, nullptr, nullptr);
-			ctx->PSGetShader(&oldPS, nullptr, nullptr);
-			ctx->IAGetInputLayout(&oldIL);
-			ctx->IAGetVertexBuffers(0, 1, &oldVB, &oldStride, &oldOffset);
-			ctx->IAGetPrimitiveTopology(&oldTopo);
-			ctx->RSGetState(&oldRS);
-			ctx->OMGetBlendState(&oldBS, oldBlendFactor, &oldSampleMask);
+				ID3D11VertexShader* oldVS = nullptr;
+				ID3D11PixelShader* oldPS = nullptr;
+				ID3D11InputLayout* oldIL = nullptr;
+				ID3D11Buffer* oldVB = nullptr;
+				ID3D11Buffer* oldCBS[1] = {};
+				ID3D11Buffer* oldPSCBS[1] = {};
+				UINT oldStride = 0, oldOffset = 0;
+				D3D11_PRIMITIVE_TOPOLOGY oldTopo = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
+				ID3D11RasterizerState* oldRS = nullptr;
+				ID3D11BlendState* oldBS = nullptr;
+				FLOAT oldBlendFactor[4] = {};
+				UINT oldSampleMask = 0;
+				ID3D11DepthStencilState* oldDSS = nullptr;
+				UINT oldStencilRef = 0;
 
-			ctx->IASetInputLayout(nullptr);
-			ID3D11Buffer* noVB[1] = { nullptr };
-			UINT zero = 0;
-			ctx->IASetVertexBuffers(0, 1, noVB, &zero, &zero);
-			ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
-			ctx->VSSetShader(s_vs, nullptr, 0);
-			ctx->PSSetShader(s_ps, nullptr, 0);
-			ctx->RSSetState(nullptr);
+				ctx->VSGetShader(&oldVS, nullptr, nullptr);
+				ctx->PSGetShader(&oldPS, nullptr, nullptr);
+				ctx->VSGetConstantBuffers(0, 1, oldCBS);
+				ctx->PSGetConstantBuffers(0, 1, oldPSCBS);
+				ctx->IAGetInputLayout(&oldIL);
+				ctx->IAGetVertexBuffers(0, 1, &oldVB, &oldStride, &oldOffset);
+				ctx->IAGetPrimitiveTopology(&oldTopo);
+				ctx->RSGetState(&oldRS);
+				ctx->OMGetBlendState(&oldBS, oldBlendFactor, &oldSampleMask);
+				ctx->OMGetDepthStencilState(&oldDSS, &oldStencilRef);
 
-			ctx->Draw(4, 0);
+				// ---- 状态设置 ----
+				ID3D11RenderTargetView* rtvs[1] = { s_bbRTV };
+				ctx->OMSetRenderTargets(1, rtvs, nullptr);
 
-			// 恢复
-			ctx->VSSetShader(oldVS, nullptr, 0);
-			ctx->PSSetShader(oldPS, nullptr, 0);
-			ctx->IASetInputLayout(oldIL);
-			ctx->IASetVertexBuffers(0, 1, &oldVB, &oldStride, &oldOffset);
-			ctx->IASetPrimitiveTopology(oldTopo);
-			ctx->RSSetState(oldRS);
-			ctx->OMSetBlendState(oldBS, oldBlendFactor, oldSampleMask);
-			ctx->RSSetViewports(1, &oldVp);
+				D3D11_VIEWPORT vp = {};
+				vp.TopLeftX = 0.0f;
+				vp.TopLeftY = 0.0f;
+				vp.Width = (FLOAT)td.Width;
+				vp.Height = (FLOAT)td.Height;
+				vp.MinDepth = 0.0f;
+				vp.MaxDepth = 1.0f;
+				ctx->RSSetViewports(1, &vp);
+				ctx->RSSetState(s_rs);
 
-			if (oldVS) oldVS->Release();
-			if (oldPS) oldPS->Release();
-			if (oldIL) oldIL->Release();
-			if (oldVB) oldVB->Release();
-			if (oldRS) oldRS->Release();
-			if (oldBS) oldBS->Release();
+				FLOAT blendFactor[4] = { 0.f, 0.f, 0.f, 0.f };
+				ctx->OMSetBlendState(s_blend, blendFactor, 0xFFFFFFFF);
+				ctx->OMSetDepthStencilState(s_ds, 0);
 
+				ctx->IASetInputLayout(nullptr);
+				ID3D11Buffer* noVB[1] = { nullptr };
+				UINT zero = 0;
+				ctx->IASetVertexBuffers(0, 1, noVB, &zero, &zero);
+				ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+
+				D3D11_MAPPED_SUBRESOURCE ms = {};
+				if (SUCCEEDED(ctx->Map(s_cb, 0, D3D11_MAP_WRITE_DISCARD, 0, &ms))) {
+					ReticleCB cb = {};
+					cb.screenW = (float)td.Width;
+					cb.screenH = (float)td.Height;
+					cb.centerX = (float)td.Width * 0.5f;
+					cb.centerY = (float)td.Height * 0.5f;
+					cb.boxW = 160.0f;
+					cb.boxH = 160.0f;
+					cb.alphaPad = 1.0f;
+					cb.pad1 = 0.0f;
+					memcpy(ms.pData, &cb, sizeof(cb));
+					ctx->Unmap(s_cb, 0);
+				}
+
+				ID3D11Buffer* cbs[1] = { s_cb };
+				ctx->VSSetConstantBuffers(0, 1, cbs);
+				ctx->PSSetConstantBuffers(0, 1, cbs);
+				ctx->VSSetShader(s_vs, nullptr, 0);
+				ctx->PSSetShader(s_ps, nullptr, 0);
+
+				ctx->Draw(4, 0);
+
+				if (s_logCount < 5) {
+					s_logCount++;
+					Log("[ReticleBox] DRAW ok bb=%ux%u oldRTV=%p oldDSV=%p oldVP=%.0fx%.0f@%.0f,%.0f",
+						td.Width, td.Height, (void*)oldRTV, (void*)oldDSV,
+						(FLOAT)oldVp[0].Width, (FLOAT)oldVp[0].Height,
+						(FLOAT)oldVp[0].TopLeftX, (FLOAT)oldVp[0].TopLeftY);
+				}
+
+				// ---- 恢复 ----
+				ctx->VSSetShader(oldVS, nullptr, 0);
+				ctx->PSSetShader(oldPS, nullptr, 0);
+				ctx->VSSetConstantBuffers(0, 1, oldCBS);
+				ctx->PSSetConstantBuffers(0, 1, oldPSCBS);
+				ctx->IASetInputLayout(oldIL);
+				ctx->IASetVertexBuffers(0, 1, &oldVB, &oldStride, &oldOffset);
+				ctx->IASetPrimitiveTopology(oldTopo);
+				ctx->RSSetState(oldRS);
+				ctx->OMSetBlendState(oldBS, oldBlendFactor, oldSampleMask);
+				ctx->OMSetDepthStencilState(oldDSS, oldStencilRef);
+				ctx->RSSetViewports(nVp, oldVp);
+				ctx->OMSetRenderTargets(1, &oldRTV, oldDSV);
+
+				if (oldVS) oldVS->Release();
+				if (oldPS) oldPS->Release();
+				if (oldCBS[0]) oldCBS[0]->Release();
+				if (oldPSCBS[0]) oldPSCBS[0]->Release();
+				if (oldIL) oldIL->Release();
+				if (oldVB) oldVB->Release();
+				if (oldRS) oldRS->Release();
+				if (oldBS) oldBS->Release();
+				if (oldDSS) oldDSS->Release();
+				if (oldRTV) oldRTV->Release();
+				if (oldDSV) oldDSV->Release();
+			} while (false);
+
+			(void)ok;
 			ctx->Release();
 			dev->Release();
 		}
