@@ -1,3 +1,6 @@
+#include <functional>
+#include <cstdio>
+#include <cstdarg>
 #include "D3DHooks.h"
 #include "DataPersistence.h"
 #include "GlobalTypes.h"
@@ -716,11 +719,91 @@ namespace ThroughScope
 		}
 	}
 
+	// ===== [RETICLE 验证] 日志辅助：直接写文件，避免 spdlog 不 flush =====
+	static void ReticleVerifyLog(const char* fmt, ...)
+	{
+		char buf[512];
+		va_list args;
+		va_start(args, fmt);
+		vsnprintf_s(buf, sizeof(buf), _TRUNCATE, fmt, args);
+		va_end(args);
+		strcat_s(buf, "\n");
+
+		HANDLE h = ::CreateFileA("E:\\Custom Fallout4\\reticlecenter.txt",
+			FILE_APPEND_DATA, FILE_SHARE_READ, nullptr,
+			OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+		if (h != INVALID_HANDLE_VALUE) {
+			DWORD written = 0;
+			::WriteFile(h, buf, (DWORD)strlen(buf), &written, nullptr);
+			::CloseHandle(h);
+		}
+	}
+
 	void __fastcall hkPCUpdateMainThread(PlayerCharacter* pChar)
 	{
 		// [FIX] 每帧更新 Chameleon 隐身效果状态
 		// 当玩家处于隐身状态时，禁用 scope 渲染相关的几何体过滤以避免 D3D11 崩溃
 		g_scopeRenderMgr->UpdateChameleonStatus();
+
+		// ===== [RETICLE 验证] 临时：确认能否隐藏 STS 瞄具里的准星节点 =====
+		// 目的：ADS 时遍历武器模型树，找名字含 Reticle 的节点并剔除，写日志。
+		// 验证通过后这段逻辑会搬进独立插件，TTS 里会删掉。
+		{
+			static bool s_lastADS = false;
+			const bool ads = IsInADS(pChar);
+			if (ads != s_lastADS) {
+				if (ads) {
+					int total = 0, exact = 0, like = 0, culled = 0, nameIdx = 0;
+					char names[8][64] = {};
+
+					std::function<void(RE::NiAVObject*, int)> walk = [&](RE::NiAVObject* obj, int depth) {
+						if (!obj || depth > 12) return;
+						total++;
+						const char* nm = obj->name.c_str();
+						if (nm && *nm) {
+							const bool isExact = (_stricmp(nm, "ReticleNode") == 0);
+							const bool isLike = (strstr(nm, "Reticle") != nullptr) || (strstr(nm, "reticle") != nullptr);
+							if (isExact) exact++;
+							if (isLike) {
+								like++;
+								if (nameIdx < 8) {
+									strncpy_s(names[nameIdx], sizeof(names[nameIdx]), nm, _TRUNCATE);
+									nameIdx++;
+								}
+								if (!obj->GetAppCulled()) {
+									obj->SetAppCulled(true);
+									culled++;
+								}
+							}
+						}
+						if (auto* node = obj->IsNode()) {
+							for (auto& child : node->children) {
+								if (child) walk(child.get(), depth + 1);
+							}
+						}
+					};
+
+					if (auto* root3d = pChar->Get3D()) {
+						if (auto* weapon = root3d->GetObjectByName("Weapon")) {
+							walk(weapon, 0);
+							ReticleVerifyLog("[ADS] nodes=%d exact=%d reticleLike=%d culled=%d",
+								total, exact, like, culled);
+							for (int i = 0; i < nameIdx; i++) {
+								ReticleVerifyLog("  name: %s", names[i]);
+							}
+						} else {
+							ReticleVerifyLog("[ADS] NO Weapon node");
+						}
+					} else {
+						ReticleVerifyLog("[ADS] NO Get3D");
+					}
+				} else {
+					ReticleVerifyLog("[ADS exit]");
+				}
+				s_lastADS = ads;
+			}
+		}
+		// ===== [RETICLE 验证] 结束 =====
 
 		auto weaponInfo = DataPersistence::GetCurrentWeaponInfo();
 
