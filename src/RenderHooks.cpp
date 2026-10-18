@@ -757,9 +757,15 @@ namespace ThroughScope
 		// 验证通过后这段逻辑会搬进独立插件，TTS 里会删掉。
 		{
 			static bool s_lastADS = false;
+			static int s_adsFrames = 0;
 			const bool ads = IsInADS(pChar);
 			g_reticleVerifyADS = ads;
-			if (ads != s_lastADS) {
+			if (!ads) { s_adsFrames = 0; } else { s_adsFrames++; }
+			const bool changed = (ads != s_lastADS);
+			// 开镜期间每 15 帧重跑一次：切枪会重建武器 3D，新节点默认可见，
+			// 只靠"状态变化时执行一次"会让切枪后准星重新冒出来。
+			const bool runNow = ads && (changed || (s_adsFrames % 15 == 1));
+			if (runNow) {
 				if (ads) {
 					int total = 0, exact = 0, like = 0, culled = 0, nameIdx = 0;
 					char names[8][64] = {};
@@ -778,10 +784,9 @@ namespace ThroughScope
 									strncpy_s(names[nameIdx], sizeof(names[nameIdx]), nm, _TRUNCATE);
 									nameIdx++;
 								}
-								if (!obj->GetAppCulled()) {
-									obj->SetAppCulled(true);
-									culled++;
-								}
+								const bool wasCulled = obj->GetAppCulled();
+								obj->SetAppCulled(true);
+								if (!wasCulled) culled++;
 							}
 						}
 						if (auto* node = obj->IsNode()) {
@@ -794,20 +799,23 @@ namespace ThroughScope
 					if (auto* root3d = pChar->Get3D()) {
 						if (auto* weapon = root3d->GetObjectByName("Weapon")) {
 							walk(weapon, 0);
-							ReticleVerifyLog("[ADS] nodes=%d exact=%d reticleLike=%d culled=%d",
-								total, exact, like, culled);
-							for (int i = 0; i < nameIdx; i++) {
-								ReticleVerifyLog("  name: %s", names[i]);
+							if (changed) {
+								ReticleVerifyLog("[ADS] nodes=%d exact=%d reticleLike=%d culled=%d",
+									total, exact, like, culled);
+								for (int i = 0; i < nameIdx; i++) {
+									ReticleVerifyLog("  name: %s", names[i]);
+								}
 							}
-						} else {
+						} else if (changed) {
 							ReticleVerifyLog("[ADS] NO Weapon node");
 						}
-					} else {
+					} else if (changed) {
 						ReticleVerifyLog("[ADS] NO Get3D");
 					}
-				} else {
-					ReticleVerifyLog("[ADS exit]");
 				}
+			}
+			if (changed) {
+				if (!ads) ReticleVerifyLog("[ADS exit]");
 				s_lastADS = ads;
 			}
 		}
