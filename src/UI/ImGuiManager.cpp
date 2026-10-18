@@ -234,6 +234,24 @@ namespace ThroughScope
 		ImGui_ImplWin32_NewFrame();
 		ImGui::NewFrame();
 
+		// ===== [RETICLE 验证：绿方块] 只为确认绘制链路可用 =====
+		// 屏幕正中画一块纯绿色方块，只在开镜时显示。
+		// 它和 TTS 的白色准星贴图完全不同，一眼可辨。
+		extern bool g_reticleVerifyADS;
+		if (g_reticleVerifyADS) {
+			ImDrawList* bg = ImGui::GetBackgroundDrawList();
+			if (bg) {
+				const ImVec2 sz = ImGui::GetIO().DisplaySize;
+				const float w = 120.0f;
+				bg->AddRectFilled(
+					ImVec2(sz.x * 0.5f - w * 0.5f, sz.y * 0.5f - w * 0.5f),
+					ImVec2(sz.x * 0.5f + w * 0.5f, sz.y * 0.5f + w * 0.5f),
+					IM_COL32(0, 255, 0, 200));
+			}
+		}
+		// ===== [RETICLE 验证：绿方块] 结束 =====
+
+
 		// 渲染主菜单
 		RenderMainMenu();
 
