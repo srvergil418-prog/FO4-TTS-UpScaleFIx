@@ -746,6 +746,27 @@ namespace ThroughScope
 		}
 	}
 
+	// [RETICLE 诊断] 递归打印节点树（不改任何数据）
+	static void DumpTree(RE::NiAVObject* a_obj, int a_depth, int& a_count)
+	{
+		if (!a_obj || a_depth > 14 || a_count > 400) return;
+		a_count++;
+		const char* nm = a_obj->name.c_str();
+		const char* cls = a_obj->GetRTTI() ? a_obj->GetRTTI()->GetName() : "?";
+		ReticleVerifyLog("[TREE]d%02d %-34s %-18s local=(%.3f,%.3f,%.3f) world=(%.2f,%.2f,%.2f) s=%.3f",
+			a_depth,
+			(nm && *nm) ? nm : "(unnamed)",
+			cls ? cls : "?",
+			a_obj->local.translate.x, a_obj->local.translate.y, a_obj->local.translate.z,
+			a_obj->world.translate.x, a_obj->world.translate.y, a_obj->world.translate.z,
+			a_obj->world.scale);
+		if (auto* node = a_obj->IsNode()) {
+			for (auto& child : node->children) {
+				if (child) DumpTree(child.get(), a_depth + 1, a_count);
+			}
+		}
+	}
+
 	// 在武器模型树里找准星节点（名字含 Reticle，实测节点名是 "Reticle:0"）
 	static RE::NiAVObject* FindReticleNode(RE::PlayerCharacter* a_char, int* a_pTotal = nullptr)
 	{
@@ -819,83 +840,50 @@ namespace ThroughScope
 		// 当玩家处于隐身状态时，禁用 scope 渲染相关的几何体过滤以避免 D3D11 崩溃
 		g_scopeRenderMgr->UpdateChameleonStatus();
 
-		// ===== [RETICLE 对齐] ADS 时让准星节点始终落在屏幕正中 =====
-		// 不隐藏、不绘制，只改 3D 节点的局部位移：准星仍然是瞄具模型的一部分，
-		// 只在透过镜片/镜筒时才看得到；镜外被遮住，也没有任何额外 draw call。
+		// ===== [RETICLE 诊断] 只记录，不修改任何节点 =====
+		// 目的：分清"镜片里什么都没有"是 STS 本身如此，还是我们挪坏了节点。
+		// 每次进开镜打印一次：相机世界变换 + 整个 Weapon 子树。
 		{
 			static bool s_lastADS = false;
-			static bool s_restored = true;
-			static RE::NiAVObject* s_lastNode = nullptr;
-			static RE::NiTransform s_origLocal{};
-			static int s_logCount = 0;
-
+			static int s_dumpCount = 0;
 			const bool ads = IsInADS(pChar);
 			g_reticleVerifyADS = ads;
 			const bool changed = (ads != s_lastADS);
 
-			if (ads) {
-				// 每帧都算：相机一直在动，隔帧更新会让准星抖动
-				int total = 0;
-				RE::NiAVObject* reticle = FindReticleNode(pChar, &total);
+			if (ads && changed && s_dumpCount < 8) {
+				s_dumpCount++;
 
-				if (reticle) {
-					// 换枪/节点重建时重新记原始局部变换
-					if (reticle != s_lastNode) {
-						s_origLocal = reticle->local;
-						s_lastNode = reticle;
-						s_restored = false;
-						if (s_logCount < 40) {
-							s_logCount++;
-							ReticleVerifyLog("[RET] node=%s origLocal=(%.3f,%.3f,%.3f) parent=%s",
-								reticle->name.c_str(),
-								s_origLocal.translate.x, s_origLocal.translate.y, s_origLocal.translate.z,
-								reticle->parent ? reticle->parent->name.c_str() : "(null)");
-						}
-					}
-
-					RE::NiPoint3 newLocal{};
-					const bool ok = AlignReticleToCamera(reticle, newLocal);
-					if (ok) s_restored = false;
-
-					if (s_logCount < 40) {
-						s_logCount++;
-						auto* cam = RE::PlayerCamera::GetSingleton();
-						auto* camRoot = (cam && cam->cameraRoot) ? cam->cameraRoot.get() : nullptr;
-						const RE::NiPoint3 retW = reticle->world.translate;
-						if (camRoot) {
-							const auto& cw = camRoot->world;
-							ReticleVerifyLog("[ALIGN] ok=%d camPos=(%.1f,%.1f,%.1f) rotRow0=(%.2f,%.2f,%.2f) retWorld=(%.1f,%.1f,%.1f) newLocal=(%.3f,%.3f,%.3f)",
-								ok ? 1 : 0,
-								cw.translate.x, cw.translate.y, cw.translate.z,
-								cw.rotate.entry[0].x, cw.rotate.entry[0].y, cw.rotate.entry[0].z,
-								retW.x, retW.y, retW.z,
-								newLocal.x, newLocal.y, newLocal.z);
-							ReticleVerifyLog("[ALIGN] rotRow1=(%.2f,%.2f,%.2f) rotRow2=(%.2f,%.2f,%.2f)",
-								cw.rotate.entry[1].x, cw.rotate.entry[1].y, cw.rotate.entry[1].z,
-								cw.rotate.entry[2].x, cw.rotate.entry[2].y, cw.rotate.entry[2].z);
-						} else {
-							ReticleVerifyLog("[ALIGN] ok=%d camRoot=NULL", ok ? 1 : 0);
-						}
-					}
-				} else if (changed) {
-					ReticleVerifyLog("[ADS] no reticle node (nodes=%d)", total);
+				auto* cam = RE::PlayerCamera::GetSingleton();
+				if (cam && cam->cameraRoot) {
+					const auto& cw = cam->cameraRoot->world;
+					ReticleVerifyLog("[CAM] pos=(%.2f,%.2f,%.2f) r0=(%.3f,%.3f,%.3f) r1=(%.3f,%.3f,%.3f) r2=(%.3f,%.3f,%.3f)",
+						cw.translate.x, cw.translate.y, cw.translate.z,
+						cw.rotate.entry[0].x, cw.rotate.entry[0].y, cw.rotate.entry[0].z,
+						cw.rotate.entry[1].x, cw.rotate.entry[1].y, cw.rotate.entry[1].z,
+						cw.rotate.entry[2].x, cw.rotate.entry[2].y, cw.rotate.entry[2].z);
+				} else {
+					ReticleVerifyLog("[CAM] cameraRoot NULL");
 				}
-			} else {
-				// 退出开镜：还原原始局部变换。节点可能已被切枪重建，
-				// 所以重新查一次、只比较指针不访问旧指针。
-				if (!s_restored && s_lastNode) {
-					if (FindReticleNode(pChar) == s_lastNode) {
-						s_lastNode->local = s_origLocal;
+
+				int count = 0;
+				if (auto* root3d = pChar->Get3D(); root3d) {
+					if (auto* weapon = root3d->GetObjectByName("Weapon")) {
+						DumpTree(weapon, 0, count);
+						ReticleVerifyLog("[TREE] done, %d nodes", count);
+					} else {
+						ReticleVerifyLog("[TREE] no Weapon node");
 					}
-					s_restored = true;
-					s_lastNode = nullptr;
+				} else {
+					ReticleVerifyLog("[TREE] no Get3D");
 				}
-				if (changed) ReticleVerifyLog("[ADS exit]");
 			}
 
-			if (changed) s_lastADS = ads;
+			if (changed) {
+				if (!ads) ReticleVerifyLog("[ADS exit]");
+				s_lastADS = ads;
+			}
 		}
-		// ===== [RETICLE 对齐] 结束 =====
+		// ===== [RETICLE 诊断] 结束 =====
 
 		auto weaponInfo = DataPersistence::GetCurrentWeaponInfo();
 
