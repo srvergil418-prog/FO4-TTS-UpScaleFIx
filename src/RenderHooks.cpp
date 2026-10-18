@@ -719,6 +719,9 @@ namespace ThroughScope
 		}
 	}
 
+	// ===== [RETICLE 验证] 全局 ADS 标志（供 ImGui 绘制用）=====
+	bool g_reticleVerifyADS = false;
+
 	// ===== [RETICLE 验证] 日志辅助：直接写文件，避免 spdlog 不 flush =====
 	static void ReticleVerifyLog(const char* fmt, ...)
 	{
@@ -751,6 +754,7 @@ namespace ThroughScope
 		{
 			static bool s_lastADS = false;
 			const bool ads = IsInADS(pChar);
+			g_reticleVerifyADS = ads;
 			if (ads != s_lastADS) {
 				if (ads) {
 					int total = 0, exact = 0, like = 0, culled = 0, nameIdx = 0;
