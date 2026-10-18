@@ -234,21 +234,9 @@ namespace ThroughScope
 		ImGui_ImplWin32_NewFrame();
 		ImGui::NewFrame();
 
-		// ===== [RETICLE 验证：绿方块] 只为确认绘制链路可用 =====
-		// 屏幕正中画一块纯绿色方块，只在开镜时显示。
-		// 它和 TTS 的白色准星贴图完全不同，一眼可辨。
-		if (ThroughScope::g_reticleVerifyADS) {
-			ImDrawList* bg = ImGui::GetBackgroundDrawList();
-			if (bg) {
-				const ImVec2 sz = ImGui::GetIO().DisplaySize;
-				const float w = 120.0f;
-				bg->AddRectFilled(
-					ImVec2(sz.x * 0.5f - w * 0.5f, sz.y * 0.5f - w * 0.5f),
-					ImVec2(sz.x * 0.5f + w * 0.5f, sz.y * 0.5f + w * 0.5f),
-					IM_COL32(0, 255, 0, 200));
-			}
-		}
-		// ===== [RETICLE 验证：绿方块] 结束 =====
+		// ===== [RETICLE 验证] 绿方块已移到 D3DHooks.cpp 的 ReticleBox（Present 前直绘）=====
+		// 这里不要再画：ImGui 的 Render() 只在菜单打开时执行，且会和 D3D 直绘重复。
+		// ===== [RETICLE 验证] 结束 =====
 
 
 		// 渲染主菜单
