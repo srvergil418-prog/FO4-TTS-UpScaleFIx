@@ -1340,7 +1340,7 @@ cbuffer Cb : register(b0) {
 };
 VSOut main(uint id : SV_VertexID) {
     float2 c[4]  = { float2(-0.5,-0.5), float2(0.5,-0.5), float2(-0.5,0.5), float2(0.5,0.5) };
-    float2 uv[4] = { float2(0.0,1.0),  float2(1.0,1.0),  float2(0.0,0.0), float2(1.0,0.0) };
+    float2 uv[4] = { float2(0.0,0.0),  float2(1.0,0.0),  float2(0.0,1.0), float2(1.0,1.0) };
     float2 px = float2(centerX, centerY) + c[id] * float2(boxW, boxH);
     VSOut o;
     o.pos = float4( px.x / screenW * 2.0 - 1.0,
@@ -1545,10 +1545,9 @@ float4 main(float4 pos : SV_POSITION, float2 uv : TEXCOORD0) : SV_Target {
 
 		static void Draw(IDXGISwapChain* pSwapChain)
 		{
-			// 现在準星走 3D 节点对齐（RenderHooks.cpp: AlignReticleToCamera），
-			// 屏幕叠加会把准星画到镜筒外面，所以默认关闭。
-			// 想对比两种效果时把它改成 true。
-			static constexpr bool kScreenOverlay = false;
+			// 屏幕叠加准星：原 STS 准星由 RenderHooks 里的 SetAppCulled 隐藏，
+			// 这里画一个钉死在屏幕中心的替代品。
+			static constexpr bool kScreenOverlay = true;
 			if (!kScreenOverlay) return;
 
 			if (!g_reticleVerifyADS) return;
@@ -1635,8 +1634,8 @@ float4 main(float4 pos : SV_POSITION, float2 uv : TEXCOORD0) : SV_Target {
 				cbData.screenH = (float)td.Height;
 				cbData.centerX = (float)td.Width * 0.5f;
 				cbData.centerY = (float)td.Height * 0.5f;
-				cbData.boxW = (float)td.Height * 0.55f;
-				cbData.boxH = (float)td.Height * 0.55f;
+				cbData.boxW = (float)td.Height * 0.35f;
+				cbData.boxH = (float)td.Height * 0.35f;
 				cbData.alphaMul = 1.0f;
 				cbData.pad1 = 0.0f;
 
