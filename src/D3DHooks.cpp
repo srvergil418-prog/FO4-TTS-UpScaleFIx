@@ -1285,6 +1285,9 @@ namespace ThroughScope {
 	// 诊断日志写到 E:\Custom Fallout4\reticle-box.txt
 	// ===========================================================================
 	extern bool g_reticleVerifyADS;
+	extern float g_reticleMaskCX;
+	extern float g_reticleMaskCY;
+	extern float g_reticleMaskR;
 
 	namespace ReticleBox
 	{
@@ -1293,7 +1296,9 @@ namespace ThroughScope {
 			float screenW, screenH;
 			float centerX, centerY;
 			float boxW, boxH;
-			float alphaMul, pad1;
+			float alphaMul, maskR;
+			float maskCX, maskCY;
+			float pad0, pad1;
 		};
 
 		static ID3D11VertexShader* s_vs = nullptr;
@@ -1336,7 +1341,8 @@ namespace ThroughScope {
 		static const char* kVS = R"(
 struct VSOut { float4 pos : SV_POSITION; float2 uv : TEXCOORD0; };
 cbuffer Cb : register(b0) {
-    float screenW, screenH, centerX, centerY, boxW, boxH, alphaMul, pad1;
+    float screenW, screenH, centerX, centerY, boxW, boxH, alphaMul, maskR;
+    float maskCX, maskCY, pad0, pad1;
 };
 VSOut main(uint id : SV_VertexID) {
     float2 c[4]  = { float2(-0.5,-0.5), float2(0.5,-0.5), float2(-0.5,0.5), float2(0.5,0.5) };
@@ -1353,11 +1359,17 @@ VSOut main(uint id : SV_VertexID) {
 
 		static const char* kPS = R"(
 cbuffer Cb : register(b0) {
-    float screenW, screenH, centerX, centerY, boxW, boxH, alphaMul, pad1;
+    float screenW, screenH, centerX, centerY, boxW, boxH, alphaMul, maskR;
+    float maskCX, maskCY, pad0, pad1;
 };
 Texture2D    gTex  : register(t0);
 SamplerState gSamp : register(s0);
 float4 main(float4 pos : SV_POSITION, float2 uv : TEXCOORD0) : SV_Target {
+    // 圆形遮罩：只画在镜片圆内。镜片晃动/倾斜时准星会被切掉一部分，这是预期行为。
+    if (maskR > 0.5) {
+        float2 d = pos.xy - float2(maskCX, maskCY);
+        if (dot(d, d) > maskR * maskR) discard;
+    }
     float4 c = gTex.Sample(gSamp, uv);
     return float4(c.rgb, c.a * alphaMul);
 }
@@ -1634,9 +1646,16 @@ float4 main(float4 pos : SV_POSITION, float2 uv : TEXCOORD0) : SV_Target {
 				cbData.screenH = (float)td.Height;
 				cbData.centerX = (float)td.Width * 0.5f;
 				cbData.centerY = (float)td.Height * 0.5f;
-				cbData.boxW = (float)td.Height * 0.35f;
-				cbData.boxH = (float)td.Height * 0.35f;
+				// 有遮罩时：圆多大，准星就铺多大，然后被圆裁掉超出部分
+				const float maskR = g_reticleMaskR;
+				const float boxSide = (maskR > 1.0f) ? (maskR * 2.0f) : ((float)td.Height * 0.35f);
+				cbData.boxW = boxSide;
+				cbData.boxH = boxSide;
 				cbData.alphaMul = 1.0f;
+				cbData.maskR = (maskR > 1.0f) ? maskR : 0.0f;
+				cbData.maskCX = g_reticleMaskCX;
+				cbData.maskCY = g_reticleMaskCY;
+				cbData.pad0 = 0.0f;
 				cbData.pad1 = 0.0f;
 
 				D3D11_MAPPED_SUBRESOURCE ms = {};
@@ -1657,10 +1676,10 @@ float4 main(float4 pos : SV_POSITION, float2 uv : TEXCOORD0) : SV_Target {
 
 				if (s_logCount < 5) {
 					s_logCount++;
-					Log("[ReticleBox] DRAW ok bb=%ux%u box=%.0f tex=%s oldRTV=%p oldDSV=%p oldVP=%.0fx%.0f",
-						td.Width, td.Height, (float)cbData.boxW, s_texFromFile ? "DDS" : "GREEN",
-						(void*)oldRTV, (void*)oldDSV,
-						(FLOAT)oldVp[0].Width, (FLOAT)oldVp[0].Height);
+					Log("[ReticleBox] DRAW ok bb=%ux%u box=%.0f mask=(%.0f,%.0f,r=%.0f) tex=%s",
+						td.Width, td.Height, (float)cbData.boxW,
+						cbData.maskCX, cbData.maskCY, cbData.maskR,
+						s_texFromFile ? "DDS" : "GREEN");
 				}
 
 				// ---- 恢复 ----
