@@ -25,6 +25,11 @@
 #include <winternl.h>
 #include <xmmintrin.h>
 
+// ===== [RETICLE ??] ?? ADS ?? =====
+// ??????????ImGuiManager.cpp ?? extern ????
+// ??? namespace ThroughScope ???? LNK2001 unresolved external?
+bool g_reticleVerifyADS = false;
+
 namespace ThroughScope
 {
 	using namespace Utilities;
@@ -720,8 +725,6 @@ namespace ThroughScope
 	}
 
 	// ===== [RETICLE 验证] 全局 ADS 标志（供 ImGui 绘制用）=====
-	bool g_reticleVerifyADS = false;
-
 	// ===== [RETICLE 验证] 日志辅助：直接写文件，避免 spdlog 不 flush =====
 	static void ReticleVerifyLog(const char* fmt, ...)
 	{
