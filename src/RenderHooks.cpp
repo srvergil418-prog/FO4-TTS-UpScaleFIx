@@ -773,10 +773,9 @@ namespace ThroughScope
 		const float tanHalfV = std::tan(fovRad * 0.5f);
 		if (tanHalfV < 1e-4f) return;
 
-		auto* gs = RE::BSGraphics::State::GetSingleton();
-		if (!gs) return;
-		const float W = static_cast<float>(gs->backBufferWidth);
-		const float H = static_cast<float>(gs->backBufferHeight);
+		const auto& gs = RE::BSGraphics::State::GetSingleton();
+		const float W = static_cast<float>(gs.backBufferWidth);
+		const float H = static_cast<float>(gs.backBufferHeight);
 		if (W < 1.0f || H < 1.0f) return;
 		const float tanHalfH = tanHalfV * (W / H);
 
