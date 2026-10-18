@@ -1274,6 +1274,166 @@ namespace ThroughScope {
 		device->Release();
 	}
 
+	// ===========================================================================
+	// [RETICLE 验证] 纯色方块绘制（D3D11 直接画，不经过 ImGui）
+	//
+	// 目的：确认能在【游戏画面】上绘制内容（而不是只在菜单里）。
+	// 位置固定在屏幕中心，仅在 ADS 时绘制。
+	//
+	// 实现：用 D3DCompile 运行时编译一段极简 shader，
+	//       用 4 个 SV_VertexID 生成的全屏四边形，配合居中的小 viewport 定位。
+	// ===========================================================================
+	extern bool g_reticleVerifyADS;
+
+	namespace ReticleBox
+	{
+		static ID3D11VertexShader* s_vs = nullptr;
+		static ID3D11PixelShader*  s_ps = nullptr;
+		static bool s_tried = false;
+		static bool s_ok = false;
+
+		typedef HRESULT(WINAPI* D3DCompile_t)(LPCVOID, SIZE_T, LPCSTR, const D3D_SHADER_MACRO*,
+			ID3DInclude*, LPCSTR, LPCSTR, UINT, UINT, ID3DBlob**, ID3DBlob**);
+
+		static const char* kVS = R"(
+struct VSOut { float4 pos : SV_POSITION; };
+VSOut main(uint id : SV_VertexID) {
+    float2 p[4] = { float2(-1,-1), float2(1,-1), float2(-1,1), float2(1,1) };
+    VSOut o;
+    o.pos = float4(p[id], 0.0, 1.0);
+    return o;
+}
+)";
+
+		static const char* kPS = R"(
+float4 main() : SV_Target {
+    return float4(0.0, 1.0, 0.0, 0.85);
+}
+)";
+
+		static bool Init(ID3D11Device* dev)
+		{
+			if (s_tried) return s_ok;
+			s_tried = true;
+
+			HMODULE comp = ::LoadLibraryA("d3dcompiler_47.dll");
+			if (!comp) { logger::error("[ReticleBox] d3dcompiler_47.dll 加载失败"); return false; }
+			auto compile = (D3DCompile_t)::GetProcAddress(comp, "D3DCompile");
+			if (!compile) { logger::error("[ReticleBox] 找不到 D3DCompile"); return false; }
+
+			ID3DBlob* vsBlob = nullptr;
+			ID3DBlob* psBlob = nullptr;
+			ID3DBlob* err = nullptr;
+
+			if (FAILED(compile(kVS, strlen(kVS), "ReticleBoxVS", nullptr, nullptr, "main", "vs_5_0", 0, 0, &vsBlob, &err))) {
+				logger::error("[ReticleBox] VS 编译失败: {}", err ? (const char*)err->GetBufferPointer() : "?");
+				if (err) err->Release();
+				return false;
+			}
+			if (FAILED(compile(kPS, strlen(kPS), "ReticleBoxPS", nullptr, nullptr, "main", "ps_5_0", 0, 0, &psBlob, &err))) {
+				logger::error("[ReticleBox] PS 编译失败: {}", err ? (const char*)err->GetBufferPointer() : "?");
+				if (err) err->Release();
+				if (vsBlob) vsBlob->Release();
+				return false;
+			}
+
+			if (FAILED(dev->CreateVertexShader(vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), nullptr, &s_vs)) ||
+				FAILED(dev->CreatePixelShader(psBlob->GetBufferPointer(), psBlob->GetBufferSize(), nullptr, &s_ps))) {
+				logger::error("[ReticleBox] 创建 shader 失败");
+				vsBlob->Release(); psBlob->Release();
+				return false;
+			}
+
+			vsBlob->Release();
+			psBlob->Release();
+			s_ok = true;
+			logger::info("[ReticleBox] shader 就绪");
+			return true;
+		}
+
+		static void Draw(IDXGISwapChain* pSwapChain)
+		{
+			if (!g_reticleVerifyADS) return;
+
+			ID3D11Device* dev = nullptr;
+			ID3D11DeviceContext* ctx = nullptr;
+			if (FAILED(pSwapChain->GetDevice(__uuidof(ID3D11Device), (void**)&dev)) || !dev) return;
+			dev->GetImmediateContext(&ctx);
+			if (!ctx) { dev->Release(); return; }
+
+			if (!Init(dev)) { ctx->Release(); dev->Release(); return; }
+
+			// 备份 viewport
+			UINT nVp = 1;
+			D3D11_VIEWPORT oldVp = {};
+			ctx->RSGetViewports(&nVp, &oldVp);
+
+			// 屏幕中心 160x160 的视口
+			DXGI_SWAP_CHAIN_DESC sd = {};
+			if (FAILED(pSwapChain->GetDesc(&sd))) { ctx->Release(); dev->Release(); return; }
+			const float w = 160.0f, h = 160.0f;
+			D3D11_VIEWPORT vp = {};
+			vp.TopLeftX = (sd.BufferDesc.Width - w) * 0.5f;
+			vp.TopLeftY = (sd.BufferDesc.Height - h) * 0.5f;
+			vp.Width = w;
+			vp.Height = h;
+			vp.MinDepth = 0.0f;
+			vp.MaxDepth = 1.0f;
+			ctx->RSSetViewports(1, &vp);
+
+			// 备份并设置着色器（不绑任何输入/缓冲，纯 ID 生成顶点）
+			ID3D11VertexShader* oldVS = nullptr;
+			ID3D11PixelShader* oldPS = nullptr;
+			ID3D11InputLayout* oldIL = nullptr;
+			ID3D11Buffer* oldVB = nullptr;
+			UINT oldStride = 0, oldOffset = 0;
+			D3D11_PRIMITIVE_TOPOLOGY oldTopo = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
+			ID3D11RasterizerState* oldRS = nullptr;
+			ID3D11BlendState* oldBS = nullptr;
+			FLOAT oldBlendFactor[4] = {};
+			UINT oldSampleMask = 0;
+
+			ctx->VSGetShader(&oldVS, nullptr, nullptr);
+			ctx->PSGetShader(&oldPS, nullptr, nullptr);
+			ctx->IAGetInputLayout(&oldIL);
+			ctx->IAGetVertexBuffers(0, 1, &oldVB, &oldStride, &oldOffset);
+			ctx->IAGetPrimitiveTopology(&oldTopo);
+			ctx->RSGetState(&oldRS);
+			ctx->OMGetBlendState(&oldBS, oldBlendFactor, &oldSampleMask);
+
+			ctx->IASetInputLayout(nullptr);
+			ID3D11Buffer* noVB[1] = { nullptr };
+			UINT zero = 0;
+			ctx->IASetVertexBuffers(0, 1, noVB, &zero, &zero);
+			ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+			ctx->VSSetShader(s_vs, nullptr, 0);
+			ctx->PSSetShader(s_ps, nullptr, 0);
+			ctx->RSSetState(nullptr);
+
+			ctx->Draw(4, 0);
+
+			// 恢复
+			ctx->VSSetShader(oldVS, nullptr, 0);
+			ctx->PSSetShader(oldPS, nullptr, 0);
+			ctx->IASetInputLayout(oldIL);
+			ctx->IASetVertexBuffers(0, 1, &oldVB, &oldStride, &oldOffset);
+			ctx->IASetPrimitiveTopology(oldTopo);
+			ctx->RSSetState(oldRS);
+			ctx->OMSetBlendState(oldBS, oldBlendFactor, oldSampleMask);
+			ctx->RSSetViewports(1, &oldVp);
+
+			if (oldVS) oldVS->Release();
+			if (oldPS) oldPS->Release();
+			if (oldIL) oldIL->Release();
+			if (oldVB) oldVB->Release();
+			if (oldRS) oldRS->Release();
+			if (oldBS) oldBS->Release();
+
+			ctx->Release();
+			dev->Release();
+		}
+	}
+
 	HRESULT WINAPI D3DHooks::hkPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT Flags)
 	{
 		// 递增帧计数器
@@ -1305,6 +1465,9 @@ namespace ThroughScope {
 			imguiMgr->Update();
 			imguiMgr->Render();
 		}
+
+		// [RETICLE 验证] 在 Present 之前直接绘制（不经过 ImGui，菜单关着也生效）
+		ReticleBox::Draw(pSwapChain);
 
 		// Call original Present
 		result = s_OriginalPresent(pSwapChain, SyncInterval, Flags);
