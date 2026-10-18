@@ -1,3 +1,4 @@
+namespace ThroughScope { extern bool g_reticleVerifyADS; }
 #include "ImGuiManager.h"
 
 namespace ThroughScope
@@ -237,8 +238,7 @@ namespace ThroughScope
 		// ===== [RETICLE 验证：绿方块] 只为确认绘制链路可用 =====
 		// 屏幕正中画一块纯绿色方块，只在开镜时显示。
 		// 它和 TTS 的白色准星贴图完全不同，一眼可辨。
-		extern bool g_reticleVerifyADS;
-		if (g_reticleVerifyADS) {
+		if (ThroughScope::g_reticleVerifyADS) {
 			ImDrawList* bg = ImGui::GetBackgroundDrawList();
 			if (bg) {
 				const ImVec2 sz = ImGui::GetIO().DisplaySize;
